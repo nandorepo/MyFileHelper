@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>消息传输助手</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="top-bar">
+        <div class="brand">
+          <div class="brand-title">消息传输助手</div>
+          <div class="brand-sub">多终端同步 · 实时共享</div>
+        </div>
+        <div class="terminal-area">
+          <div class="terminal-label">在线终端</div>
+          <div class="terminal-controls">
+            <div id="terminal-wrapper" class="terminal-wrapper"></div>
+            <button id="terminal-more" class="terminal-more hidden" type="button">更多</button>
+            <div id="terminal-dropdown" class="terminal-dropdown hidden"></div>
+          </div>
+        </div>
+      </header>
+
+      <main class="content">
+        <section class="messages">
+          <div id="message-list" class="message-list"></div>
+        </section>
+        <section class="composer">
+          <form id="message-form" class="message-form">
+            <input
+              id="message-input"
+              class="message-input"
+              type="text"
+              placeholder="输入消息，回车发送"
+              autocomplete="off"
+            />
+            <div class="composer-actions">
+              <label class="upload-icon-button" for="file-input" title="上传文件">+</label>
+              <input id="file-input" class="file-input" type="file" multiple />
+              <button class="send-button" type="submit">发送</button>
+            </div>
+          </form>
+        </section>
+      </main>
+    </div>
+
+    <div id="login-mask" class="login-mask">
+      <div class="login-card">
+        <div class="login-title">请输入终端名称</div>
+        <form id="login-form" class="login-form">
+          <input
+            id="login-input"
+            class="login-input"
+            type="text"
+            placeholder="例如：MacBook-Pro"
+            autocomplete="off"
+            maxlength="24"
+            required
+          />
+          <button class="login-button" type="submit">进入</button>
+        </form>
+        <div id="login-error" class="login-error hidden"></div>
+      </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='app.js', v='20260214-5') }}"></script>
+  </body>
+</html>

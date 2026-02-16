@@ -1,0 +1,10 @@
+storage:
+  uploadDir: uploads/files
+  tempDir: uploads/chunks
+limits:
+  maxFileSizeMB: 51200
+chunking:
+  defaultChunkSizeMB: 10
+  minChunkSizeMB: 2
+  maxChunkSizeMB: 32
+  maxConcurrency: 3
