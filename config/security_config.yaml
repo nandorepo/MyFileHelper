@@ -1,0 +1,34 @@
+auth:
+  enabled: false
+  mode: api_key
+  headerName: X-API-Key
+  keys:
+    - key_id: default
+      key_value: change-me
+  bearer_tokens: []
+
+docs:
+  enabled: true
+  paths:
+    swagger_ui: /docs
+    openapi_json: /openapi.json
+    redoc: /redoc
+
+  access_control:
+    enabled: true
+    allow_ips:
+      - 127.0.0.1
+      - ::1
+    allow_cidrs:
+      - 10.0.0.0/8
+      - 172.16.0.0/12
+      - 192.168.0.0/16
+    trust_x_forwarded_for: false
+
+  auth:
+    enabled: false
+    type: basic
+    username: admin
+    password: change-me
+    header_name: X-Docs-Key
+    api_key: change-me
