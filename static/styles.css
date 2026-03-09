@@ -192,6 +192,16 @@ body {
   word-break: break-all;
 }
 
+.file-name.preview-link {
+  color: var(--accent-deep);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.file-name.preview-link:hover {
+  color: var(--accent);
+}
+
 .file-actions {
   display: flex;
   justify-content: space-between;
@@ -254,6 +264,10 @@ body {
 .message-file {
   display: grid;
   gap: 10px;
+}
+
+.message-file.preview-clickable {
+  cursor: pointer;
 }
 
 .upload-name {

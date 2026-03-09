@@ -6,6 +6,84 @@ const UPLOAD_INIT_ENDPOINT = "/api/upload/init";
 const UPLOAD_CHUNK_ENDPOINT = "/api/upload/chunk";
 const UPLOAD_COMPLETE_ENDPOINT = "/api/upload/complete";
 
+const SUPPORTED_LOCALES = {
+  zh: "zh-CN",
+  en: "en-US",
+};
+
+const I18N = {
+  "en-US": {
+    appTitle: "MyFileHelper",
+    terminalLabel: "Online Terminals",
+    more: "More",
+    messagePlaceholder: "Type a message and press Enter",
+    uploadTitle: "Upload file",
+    send: "Send",
+    loginTitle: "Enter terminal name",
+    loginPlaceholder: "e.g. MacBook-Pro",
+    join: "Join",
+    unnamedFile: "Unnamed file",
+    unsupportedPreview: "Unsupported file preview",
+    clickToPreview: "Click file name to preview",
+    download: "Download",
+    waiting: "Waiting",
+    initializing: "Initializing",
+    initFailed: "Init failed",
+    uploading: "Uploading",
+    done: "Done",
+    failed: "Failed",
+    socketLoadFailed: "Socket.IO load failed. Please check network and refresh.",
+    connectionNotReady: "Connection not ready. Please try again shortly.",
+    enterTerminalName: "Please enter a terminal name.",
+    registerTimeout: "Register timeout. Check console logs and retry.",
+    loginFailedRetry: "Login failed. Please retry.",
+    unexpectedLoginError: "Unexpected error during login. Check console.",
+    connectionClosed: "Connection closed. Please retry.",
+    cannotConnectServer: "Cannot connect to server. Check backend status.",
+    socketScriptFailed: "Socket.IO script failed to load. Please check network/proxy settings.",
+    selfName: "Me",
+  },
+  "zh-CN": {
+    appTitle: "文件传输助手",
+    terminalLabel: "在线终端",
+    more: "更多",
+    messagePlaceholder: "输入消息并按 Enter 发送",
+    uploadTitle: "上传文件",
+    send: "发送",
+    loginTitle: "输入终端名称",
+    loginPlaceholder: "例如：MacBook-Pro",
+    join: "加入",
+    unnamedFile: "未命名文件",
+    unsupportedPreview: "暂不支持该文件预览",
+    clickToPreview: "点击文件名进行预览",
+    download: "下载",
+    waiting: "等待中",
+    initializing: "初始化中",
+    initFailed: "初始化失败",
+    uploading: "上传中",
+    done: "完成",
+    failed: "失败",
+    socketLoadFailed: "Socket.IO 加载失败，请检查网络后刷新。",
+    connectionNotReady: "连接尚未就绪，请稍后重试。",
+    enterTerminalName: "请输入终端名称。",
+    registerTimeout: "注册超时，请查看控制台日志后重试。",
+    loginFailedRetry: "登录失败，请重试。",
+    unexpectedLoginError: "登录时发生异常，请检查控制台。",
+    connectionClosed: "连接已关闭，请重试。",
+    cannotConnectServer: "无法连接服务器，请检查后端状态。",
+    socketScriptFailed: "Socket.IO 脚本加载失败，请检查网络/代理设置。",
+    selfName: "我",
+  },
+};
+
+function resolveLocale() {
+  const nav = (navigator.language || "").toLowerCase();
+  if (nav.startsWith("zh")) {
+    return SUPPORTED_LOCALES.zh;
+  }
+  return SUPPORTED_LOCALES.en;
+}
+
 const SOCKET_IO_CANDIDATES = [
   "/static/vendor/socket.io.min.js",
   "/socket.io/socket.io.js",
@@ -135,6 +213,13 @@ async function ensureSocketIoLoaded() {
 }
 
 function initApp(socket) {
+  const currentLocale = resolveLocale();
+  const fallbackLocale = "en-US";
+  const dict = I18N[currentLocale] || I18N[fallbackLocale];
+  const t = (key) => dict[key] || I18N[fallbackLocale][key] || key;
+
+  document.documentElement.lang = currentLocale;
+
   const loginMask = document.getElementById("login-mask");
   const loginForm = document.getElementById("login-form");
   const loginInput = document.getElementById("login-input");
@@ -149,6 +234,41 @@ function initApp(socket) {
   const terminalMore = document.getElementById("terminal-more");
   const terminalDropdown = document.getElementById("terminal-dropdown");
   const fileInput = document.getElementById("file-input");
+
+  const terminalLabel = document.querySelector(".terminal-label");
+  const brandTitle = document.querySelector(".brand-title");
+  const messageInputNode = document.getElementById("message-input");
+  const uploadLabelNode = document.querySelector("label[for='file-input']");
+  const sendButtonNode = messageForm.querySelector(".send-button");
+  const loginTitleNode = document.querySelector(".login-title");
+
+  if (brandTitle) {
+    brandTitle.textContent = t("appTitle");
+  }
+  if (terminalLabel) {
+    terminalLabel.textContent = t("terminalLabel");
+  }
+  if (terminalMore) {
+    terminalMore.textContent = t("more");
+  }
+  if (messageInputNode) {
+    messageInputNode.placeholder = t("messagePlaceholder");
+  }
+  if (uploadLabelNode) {
+    uploadLabelNode.title = t("uploadTitle");
+  }
+  if (sendButtonNode) {
+    sendButtonNode.textContent = t("send");
+  }
+  if (loginTitleNode) {
+    loginTitleNode.textContent = t("loginTitle");
+  }
+  if (loginInput) {
+    loginInput.placeholder = t("loginPlaceholder");
+  }
+  if (loginButton) {
+    loginButton.textContent = t("join");
+  }
 
   let registerInFlight = false;
   let currentUsername = "";
@@ -185,36 +305,145 @@ function initApp(socket) {
     loginError.classList.remove("hidden");
   }
 
+  const OFFICE_EXTENSIONS = new Set([
+    "doc",
+    "docx",
+    "xls",
+    "xlsx",
+    "xlsm",
+    "xlsb",
+    "ppt",
+    "pptx",
+    "pps",
+    "ppsx",
+  ]);
+
+  function getFileName(file) {
+    return file.original_name || file.filename || t("unnamedFile");
+  }
+
+  function getFileMime(file) {
+    return (file.mime || file.mime_type || "").toLowerCase();
+  }
+
+  function getFileExt(file) {
+    const name = getFileName(file);
+    const idx = name.lastIndexOf(".");
+    if (idx < 0 || idx === name.length - 1) {
+      return "";
+    }
+    return name.slice(idx + 1).toLowerCase();
+  }
+
+  function getInlineFileUrl(file) {
+    return file.url || file.download_url || file.alias_url || "";
+  }
+
+  function appendQueryParam(url, key, value) {
+    if (!url) {
+      return "";
+    }
+    const hasQuery = url.includes("?");
+    const connector = hasQuery ? "&" : "?";
+    return `${url}${connector}${encodeURIComponent(key)}=${encodeURIComponent(value)}`;
+  }
+
+  function getDownloadFileUrl(file) {
+    if (file.download_url) {
+      return file.download_url;
+    }
+    if (file.file_id) {
+      return `/api/v1/download/${file.file_id}`;
+    }
+    return appendQueryParam(getInlineFileUrl(file), "download", "1");
+  }
+
+  function isImageFile(file) {
+    return getFileMime(file).startsWith("image/");
+  }
+
+  function isAudioFile(file) {
+    return getFileMime(file).startsWith("audio/");
+  }
+
+  function isVideoFile(file) {
+    return getFileMime(file).startsWith("video/");
+  }
+
+  function isPdfFile(file) {
+    return getFileMime(file) === "application/pdf" || getFileExt(file) === "pdf";
+  }
+
+  function isOfficeFile(file) {
+    const mime = getFileMime(file);
+    const ext = getFileExt(file);
+    return (
+      OFFICE_EXTENSIONS.has(ext) ||
+      mime === "application/msword" ||
+      mime === "application/vnd.ms-excel" ||
+      mime === "application/vnd.ms-powerpoint" ||
+      mime === "application/vnd.openxmlformats-officedocument.wordprocessingml.document" ||
+      mime === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" ||
+      mime === "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    );
+  }
+
+  function isPreviewInNewTabFile(file) {
+    return isPdfFile(file) || isOfficeFile(file);
+  }
+
   function buildFilePreview(file) {
     const wrapper = document.createElement("div");
     wrapper.className = "message-file";
 
     const preview = document.createElement("div");
     preview.className = "file-preview";
+    const inlineUrl = getInlineFileUrl(file);
+    const fileName = getFileName(file);
+    const clickablePreview = isPreviewInNewTabFile(file) && Boolean(inlineUrl);
 
-    if (file.mime && file.mime.startsWith("image/")) {
+    if (isImageFile(file) && inlineUrl) {
       const img = document.createElement("img");
-      img.src = file.url;
-      img.alt = file.original_name;
+      img.src = inlineUrl;
+      img.alt = fileName;
       preview.appendChild(img);
-    } else if (file.mime && file.mime.startsWith("audio/")) {
+    } else if (isAudioFile(file) && inlineUrl) {
       const audio = document.createElement("audio");
       audio.controls = true;
-      audio.src = file.url;
+      audio.src = inlineUrl;
       preview.appendChild(audio);
-    } else if (file.mime && file.mime.startsWith("video/")) {
+    } else if (isVideoFile(file) && inlineUrl) {
       const video = document.createElement("video");
       video.controls = true;
       video.preload = "metadata";
-      video.src = file.url;
+      video.src = inlineUrl;
       preview.appendChild(video);
+    } else if (clickablePreview) {
+      preview.textContent = t("clickToPreview");
     } else {
-      preview.textContent = "Unsupported file preview";
+      preview.textContent = t("unsupportedPreview");
     }
 
-    const name = document.createElement("div");
+    const name = document.createElement(clickablePreview ? "a" : "div");
     name.className = "file-name";
-    name.textContent = file.original_name || "Unnamed file";
+    name.textContent = fileName;
+    if (clickablePreview) {
+      name.classList.add("preview-link");
+      name.href = inlineUrl;
+      name.target = "_blank";
+      name.rel = "noopener noreferrer";
+
+      wrapper.classList.add("preview-clickable");
+      wrapper.addEventListener("click", (event) => {
+        if (event.target && event.target.closest && event.target.closest(".download-link")) {
+          return;
+        }
+        if (event.target && event.target.closest && event.target.closest(".preview-link")) {
+          return;
+        }
+        window.open(inlineUrl, "_blank", "noopener,noreferrer");
+      });
+    }
 
     const actions = document.createElement("div");
     actions.className = "file-actions";
@@ -222,7 +451,9 @@ function initApp(socket) {
     sizeText.textContent = formatBytes(file.size);
     const link = document.createElement("a");
     link.className = "download-link";
-    link.textContent = "Download";
+    link.textContent = t("download");
+    link.href = getDownloadFileUrl(file);
+    link.rel = "noopener noreferrer";
     actions.appendChild(sizeText);
     actions.appendChild(link);
 
@@ -323,9 +554,9 @@ function initApp(socket) {
     meta.className = "message-meta";
     const user = document.createElement("span");
     user.className = "message-user";
-    user.textContent = currentUsername || "Me";
+    user.textContent = currentUsername || t("selfName");
     const ts = document.createElement("span");
-    ts.textContent = new Date().toLocaleTimeString("zh-CN", { hour12: false });
+    ts.textContent = new Date().toLocaleTimeString(currentLocale, { hour12: false });
     meta.appendChild(user);
     meta.appendChild(ts);
 
@@ -336,7 +567,7 @@ function initApp(socket) {
     name.textContent = file.name;
     const status = document.createElement("div");
     status.className = "upload-meta";
-    status.textContent = "Waiting";
+    status.textContent = t("waiting");
     const progress = document.createElement("div");
     progress.className = "upload-progress";
     const bar = document.createElement("span");
@@ -359,7 +590,7 @@ function initApp(socket) {
         ? crypto.randomUUID()
         : `cm_${Date.now()}_${Math.random().toString(16).slice(2)}`;
     const ui = createUploadItem(file);
-    ui.status.textContent = "Initializing";
+    ui.status.textContent = t("initializing");
 
     let initData;
     let initPayload;
@@ -381,7 +612,7 @@ function initApp(socket) {
       }
       initPayload = initData.data || initData;
     } catch (error) {
-      ui.status.textContent = "Init failed";
+      ui.status.textContent = t("initFailed");
       logError("upload init failed", error);
       return;
     }
@@ -418,7 +649,7 @@ function initApp(socket) {
     }
 
     const queue = Array.from({ length: totalChunks }, (_, index) => index);
-    ui.status.textContent = "Uploading";
+    ui.status.textContent = t("uploading");
 
     async function worker() {
       while (queue.length) {
@@ -446,10 +677,10 @@ function initApp(socket) {
       if (!completeSuccess) {
         throw new Error(completeData.error || completeData.message || "Merge failed");
       }
-      ui.status.textContent = "Done";
+      ui.status.textContent = t("done");
       ui.bar.style.width = "100%";
     } catch (error) {
-      ui.status.textContent = "Failed";
+      ui.status.textContent = t("failed");
       logError("upload failed", error);
     }
   }
@@ -495,20 +726,20 @@ function initApp(socket) {
 
   function submitRegister(username, isAuto = false) {
     if (!socket) {
-      setLoginError("Socket.IO load failed. Please check network and refresh.");
+      setLoginError(t("socketLoadFailed"));
       logError("submit blocked: socket is null");
       return;
     }
 
     if (!socket.connected) {
-      setLoginError("Connection not ready. Please try again shortly.");
+      setLoginError(t("connectionNotReady"));
       logError("submit blocked: socket not connected");
       return;
     }
 
     const normalized = (username || "").trim();
     if (!normalized) {
-      setLoginError("Please enter a terminal name.");
+      setLoginError(t("enterTerminalName"));
       log("submit blocked: username empty");
       return;
     }
@@ -531,7 +762,7 @@ function initApp(socket) {
       ackDone = true;
       registerInFlight = false;
       loginButton.disabled = false;
-      setLoginError("Register timeout. Check console logs and retry.");
+      setLoginError(t("registerTimeout"));
       logError("register ack timeout", REGISTER_ACK_TIMEOUT_MS);
     }, REGISTER_ACK_TIMEOUT_MS);
 
@@ -554,7 +785,7 @@ function initApp(socket) {
       }
 
       if (!isAuto) {
-        setLoginError((response && response.error) || "Login failed. Please retry.");
+        setLoginError((response && response.error) || t("loginFailedRetry"));
       }
     });
   }
@@ -576,7 +807,7 @@ function initApp(socket) {
       submitRegister(loginInput.value, false);
     } catch (error) {
       loginButton.disabled = false;
-      setLoginError("Unexpected error during login. Check console.");
+      setLoginError(t("unexpectedLoginError"));
       logError("submit exception", error);
     }
   });
@@ -640,15 +871,15 @@ function initApp(socket) {
     socket.on("disconnect", (reason) => {
       logError("socket disconnected", reason);
       loginMask.classList.remove("hidden");
-      setLoginError("Connection closed. Please retry.");
+      setLoginError(t("connectionClosed"));
     });
 
     socket.on("connect_error", (error) => {
       logError("connect_error", error);
-      setLoginError("Cannot connect to server. Check backend status.");
+      setLoginError(t("cannotConnectServer"));
     });
   } else {
-    setLoginError("Socket.IO script failed to load. Please check network/proxy settings.");
+    setLoginError(t("socketScriptFailed"));
   }
 }
 
