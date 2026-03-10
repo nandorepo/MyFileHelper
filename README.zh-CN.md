@@ -126,3 +126,5 @@ python app.py
 
 - 访问 `/__health` 检查服务状态。
 - 查看 `logs/client.log` 排查前端连接与上传错误。
+
+

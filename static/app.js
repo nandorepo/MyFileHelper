@@ -837,6 +837,44 @@ function initApp(socket) {
     });
   }
 
+  function isFileDrag(event) {
+    const types = event.dataTransfer ? Array.from(event.dataTransfer.types || []) : [];
+    return types.includes("Files");
+  }
+
+  window.addEventListener("dragenter", (event) => {
+    if (!isFileDrag(event)) {
+      return;
+    }
+    event.preventDefault();
+  });
+
+  window.addEventListener("dragover", (event) => {
+    if (!isFileDrag(event)) {
+      return;
+    }
+    event.preventDefault();
+  });
+
+  window.addEventListener("dragleave", (event) => {
+    if (!isFileDrag(event)) {
+      return;
+    }
+    event.preventDefault();
+  });
+
+  window.addEventListener("drop", (event) => {
+    if (!isFileDrag(event)) {
+      return;
+    }
+    event.preventDefault();
+    const files = Array.from(event.dataTransfer ? event.dataTransfer.files || [] : []);
+    if (!files.length) {
+      return;
+    }
+    files.forEach((file) => uploadFile(file));
+  });
+
   if (socket) {
     socket.onAny((eventName, ...args) => {
       log("socket event", eventName, args);
