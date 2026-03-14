@@ -1,4 +1,4 @@
-﻿const DEBUG = true;
+﻿﻿const DEBUG = true;
 const REGISTER_ACK_TIMEOUT_MS = 8000;
 const CLIENT_LOG_ENDPOINT = "/api/client-log";
 const TERMINAL_NAME_STORAGE_KEY = "mytransfer_terminal_name";
@@ -275,6 +275,83 @@ function initApp(socket) {
   const pendingUploads = new Map();
   const renderedFileIds = new Set();
   const renderedClientMsgIds = new Set();
+  const isAndroid = /Android/i.test(navigator.userAgent || "");
+  const pauseSocketOnAndroidUpload = true;
+  let latestServerCreatedAt = "";
+  let pauseRefCount = 0;
+  let pickerPauseActive = false;
+  let suppressDisconnectNotice = false;
+  let pausedSocket = false;
+  let pausedWasConnected = false;
+  let pickerRequestedAt = 0;
+  let pickerSafetyTimer = null;
+
+  function requestSocketPause(reason) {
+    if (!socket || !pauseSocketOnAndroidUpload || !isAndroid) {
+      return;
+    }
+    pauseRefCount += 1;
+    if (pauseRefCount !== 1) {
+      return;
+    }
+    if (!socket.connected) {
+      return;
+    }
+    pausedSocket = true;
+    pausedWasConnected = true;
+    suppressDisconnectNotice = true;
+    log("pause socket", reason || "unknown");
+    socket.disconnect();
+  }
+
+  function releaseSocketPause(reason) {
+    if (!socket || !pauseSocketOnAndroidUpload || !isAndroid) {
+      return;
+    }
+    pauseRefCount = Math.max(0, pauseRefCount - 1);
+    if (pauseRefCount !== 0 || !pausedSocket) {
+      return;
+    }
+    pausedSocket = false;
+    if (pausedWasConnected) {
+      pausedWasConnected = false;
+      log("resume socket", reason || "unknown");
+      socket.connect();
+    }
+  }
+
+  function beginPickerPause() {
+    if (pickerPauseActive) {
+      return;
+    }
+    pickerPauseActive = true;
+    if (pickerSafetyTimer) {
+      clearTimeout(pickerSafetyTimer);
+      pickerSafetyTimer = null;
+    }
+    requestSocketPause("picker");
+    pickerSafetyTimer = setTimeout(() => {
+      pickerSafetyTimer = null;
+      endPickerPause();
+    }, 30000);
+  }
+
+  function endPickerPause() {
+    if (!pickerPauseActive) {
+      return;
+    }
+    pickerPauseActive = false;
+    if (pickerSafetyTimer) {
+      clearTimeout(pickerSafetyTimer);
+      pickerSafetyTimer = null;
+    }
+    releaseSocketPause("picker");
+  }
+
+  function markPickerRequest() {
+    pickerRequestedAt = Date.now();
+    beginPickerPause();
+  }
 
   try {
     const cached = (localStorage.getItem(TERMINAL_NAME_STORAGE_KEY) || "").trim();
@@ -485,55 +562,153 @@ function initApp(socket) {
   }
 
   function renderMessage(message) {
-    const fileId = message && message.file ? message.file.file_id : null;
-    const clientMsgId = message ? message.client_msg_id : null;
-    if (clientMsgId && pendingUploads.has(clientMsgId)) {
-      const existing = pendingUploads.get(clientMsgId);
-      const replacement = buildMessageElement(message);
-      existing.replaceWith(replacement);
-      pendingUploads.delete(clientMsgId);
-      if (fileId) {
-        pendingUploads.delete(fileId);
+    try {
+      if (message && message.kind === "file" && !message.file && Array.isArray(message.attachments)) {
+        const first = message.attachments[0];
+        if (first) {
+          message.file = {
+            file_id: first.file_id,
+            original_name: first.filename,
+            size: first.size,
+            mime: first.mime_type,
+            url: first.url,
+            download_url: first.url,
+          };
+          if (!message.text) {
+            message.text = first.filename || t("unnamedFile");
+          }
+        }
       }
+      if (message && message.created_at && !message._local_only) {
+        if (!latestServerCreatedAt) {
+          latestServerCreatedAt = message.created_at;
+        } else {
+          const nextTime = Date.parse(message.created_at);
+          const prevTime = Date.parse(latestServerCreatedAt);
+          if (!Number.isNaN(nextTime) && !Number.isNaN(prevTime) && nextTime > prevTime) {
+            latestServerCreatedAt = message.created_at;
+          }
+        }
+      }
+      const fileId = message && message.file ? message.file.file_id : null;
+      const clientMsgId = message ? message.client_msg_id : null;
+      sendClientLog("info", [
+        "renderMessage",
+        {
+          fileId,
+          clientMsgId,
+          listExists: Boolean(messageList),
+          listCount: messageList ? messageList.children.length : 0,
+          loginHidden: loginMask ? loginMask.classList.contains("hidden") : null,
+          pendingByClient: clientMsgId ? pendingUploads.has(clientMsgId) : false,
+          pendingByFile: fileId ? pendingUploads.has(fileId) : false,
+        },
+      ]);
+
+      if (clientMsgId && pendingUploads.has(clientMsgId)) {
+        const existing = pendingUploads.get(clientMsgId);
+        const replacement = buildMessageElement(message);
+        if (existing && existing.isConnected) {
+          existing.replaceWith(replacement);
+        } else {
+          messageList.appendChild(replacement);
+        }
+        pendingUploads.delete(clientMsgId);
+        if (fileId) {
+          pendingUploads.delete(fileId);
+        }
+        if (fileId) {
+          renderedFileIds.add(fileId);
+        }
+        renderedClientMsgIds.add(clientMsgId);
+        messageList.scrollTop = messageList.scrollHeight;
+        sendClientLog("info", ["renderMessage_done", "pending_client"]);
+        return;
+      }
+
+      if (fileId && pendingUploads.has(fileId)) {
+        const existing = pendingUploads.get(fileId);
+        const replacement = buildMessageElement(message);
+        if (existing && existing.isConnected) {
+          existing.replaceWith(replacement);
+        } else {
+          messageList.appendChild(replacement);
+        }
+        pendingUploads.delete(fileId);
+        if (clientMsgId) {
+          pendingUploads.delete(clientMsgId);
+        }
+        renderedFileIds.add(fileId);
+        if (clientMsgId) {
+          renderedClientMsgIds.add(clientMsgId);
+        }
+        messageList.scrollTop = messageList.scrollHeight;
+        sendClientLog("info", ["renderMessage_done", "pending_file"]);
+        return;
+      }
+
+      if (fileId && renderedFileIds.has(fileId)) {
+        sendClientLog("info", ["renderMessage_skip", "file_dup"]);
+        return;
+      }
+      if (clientMsgId && renderedClientMsgIds.has(clientMsgId)) {
+        sendClientLog("info", ["renderMessage_skip", "client_dup"]);
+        return;
+      }
+
+      messageList.appendChild(buildMessageElement(message));
       if (fileId) {
         renderedFileIds.add(fileId);
       }
-      renderedClientMsgIds.add(clientMsgId);
-      messageList.scrollTop = messageList.scrollHeight;
-      return;
-    }
-
-    if (fileId && pendingUploads.has(fileId)) {
-      const existing = pendingUploads.get(fileId);
-      const replacement = buildMessageElement(message);
-      existing.replaceWith(replacement);
-      pendingUploads.delete(fileId);
-      if (clientMsgId) {
-        pendingUploads.delete(clientMsgId);
-      }
-      renderedFileIds.add(fileId);
       if (clientMsgId) {
         renderedClientMsgIds.add(clientMsgId);
       }
       messageList.scrollTop = messageList.scrollHeight;
-      return;
+      sendClientLog("info", ["renderMessage_done", "append"]);
+    } catch (error) {
+      logError("renderMessage failed", error);
+      sendClientLog("error", ["renderMessage_failed", serializeLogValue(error)]);
     }
+  }
 
-    if (fileId && renderedFileIds.has(fileId)) {
+  async function syncMessagesAfterUpload() {
+    if (!isAndroid) {
       return;
     }
-    if (clientMsgId && renderedClientMsgIds.has(clientMsgId)) {
-      return;
+    try {
+      const url = new URL("/api/messages", window.location.origin);
+      url.searchParams.set("limit", "50");
+      if (latestServerCreatedAt) {
+        url.searchParams.set("since", latestServerCreatedAt);
+      }
+      const resp = await fetch(url.toString());
+      const data = await resp.json();
+      const ok = resp.ok && (data.ok === true || data.code === 0);
+      if (!ok) {
+        throw new Error(data.error || data.message || "sync failed");
+      }
+      const payload = data.data || data;
+      const items = payload.items || [];
+      log("sync after upload items", items.length);
+      sendClientLog("info", ["sync_after_upload_items", items.length]);
+      items.forEach(renderMessage);
+      if (!items.length) {
+        const fallbackUrl = new URL("/api/messages", window.location.origin);
+        fallbackUrl.searchParams.set("limit", "20");
+        const fallbackResp = await fetch(fallbackUrl.toString());
+        const fallbackData = await fallbackResp.json();
+        const fallbackOk = fallbackResp.ok && (fallbackData.ok === true || fallbackData.code === 0);
+        if (fallbackOk) {
+          const fallbackPayload = fallbackData.data || fallbackData;
+          const fallbackItems = fallbackPayload.items || [];
+          log("fallback sync items", fallbackItems.length);
+          sendClientLog("info", ["fallback_sync_items", fallbackItems.length]);
+          fallbackItems.forEach(renderMessage);
+        }
+      }
+    } catch (error) {
+      logError("sync after upload failed", error);
     }
-
-    messageList.appendChild(buildMessageElement(message));
-    if (fileId) {
-      renderedFileIds.add(fileId);
-    }
-    if (clientMsgId) {
-      renderedClientMsgIds.add(clientMsgId);
-    }
-    messageList.scrollTop = messageList.scrollHeight;
   }
 
   function formatBytes(size) {
@@ -585,6 +760,7 @@ function initApp(socket) {
   }
 
   async function uploadFile(file) {
+    requestSocketPause("upload");
     const clientMsgId =
       typeof crypto !== "undefined" && crypto.randomUUID
         ? crypto.randomUUID()
@@ -614,6 +790,7 @@ function initApp(socket) {
     } catch (error) {
       ui.status.textContent = t("initFailed");
       logError("upload init failed", error);
+      releaseSocketPause("upload-init-failed");
       return;
     }
 
@@ -677,11 +854,58 @@ function initApp(socket) {
       if (!completeSuccess) {
         throw new Error(completeData.error || completeData.message || "Merge failed");
       }
+      const payload = completeData.data || completeData;
+      if (payload) {
+        const nowTs = new Date().toLocaleTimeString(currentLocale, { hour12: false });
+        if (payload.message) {
+          const message = { ...payload.message };
+          if (!message.ts) {
+            message.ts = nowTs;
+          }
+          if ((!message.file || !message.file.file_id) && payload.file) {
+            const file = payload.file;
+            message.file = {
+              file_id: file.file_id,
+              original_name: file.filename,
+              size: file.size,
+              mime: file.mime_type,
+              url: file.url,
+              download_url: file.url,
+            };
+          }
+          if (!message.kind) {
+            message.kind = message.file ? "file" : "text";
+          }
+          renderMessage(message);
+        } else if (payload.file) {
+          const file = payload.file;
+          renderMessage({
+            user: currentUsername || t("selfName"),
+            ts: nowTs,
+            kind: "file",
+            text: file.filename || t("unnamedFile"),
+            file: {
+              file_id: file.file_id,
+              original_name: file.filename,
+              size: file.size,
+              mime: file.mime_type,
+              url: file.url,
+              download_url: file.url,
+            },
+            client_msg_id: clientMsgId,
+            created_at: new Date().toISOString(),
+            _local_only: true,
+          });
+        }
+      }
+      syncMessagesAfterUpload();
       ui.status.textContent = t("done");
       ui.bar.style.width = "100%";
     } catch (error) {
       ui.status.textContent = t("failed");
       logError("upload failed", error);
+    } finally {
+      releaseSocketPause("upload");
     }
   }
 
@@ -795,6 +1019,25 @@ function initApp(socket) {
   });
 
   window.addEventListener("resize", updateOverflow);
+  window.addEventListener("focus", () => {
+    if (pickerPauseActive) {
+      endPickerPause();
+    }
+  });
+  document.addEventListener("visibilitychange", () => {
+    if (!isAndroid || !pauseSocketOnAndroidUpload) {
+      return;
+    }
+    if (document.hidden) {
+      if (Date.now() - pickerRequestedAt < 2000) {
+        beginPickerPause();
+      }
+      return;
+    }
+    if (pickerPauseActive) {
+      endPickerPause();
+    }
+  });
 
   loginForm.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -827,13 +1070,26 @@ function initApp(socket) {
   });
 
   if (fileInput) {
+    if (uploadLabelNode) {
+      uploadLabelNode.addEventListener("click", () => {
+        markPickerRequest();
+      });
+      uploadLabelNode.addEventListener("touchstart", () => {
+        markPickerRequest();
+      });
+    }
+    fileInput.addEventListener("click", () => {
+      markPickerRequest();
+    });
     fileInput.addEventListener("change", () => {
       const files = Array.from(fileInput.files || []);
       if (!files.length) {
+        endPickerPause();
         return;
       }
       files.forEach((file) => uploadFile(file));
       fileInput.value = "";
+      endPickerPause();
     });
   }
 
@@ -907,6 +1163,11 @@ function initApp(socket) {
     });
 
     socket.on("disconnect", (reason) => {
+      if (suppressDisconnectNotice || pauseRefCount > 0) {
+        suppressDisconnectNotice = false;
+        log("socket disconnect suppressed", reason);
+        return;
+      }
       logError("socket disconnected", reason);
       loginMask.classList.remove("hidden");
       setLoginError(t("connectionClosed"));
@@ -933,5 +1194,3 @@ function initApp(socket) {
     logError("bootstrap failed", error);
   }
 })();
-
-
