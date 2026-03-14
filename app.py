@@ -6,7 +6,8 @@ from flask import Flask
 from flask_socketio import SocketIO
 
 from modules.cleanup import clean_upload_dirs
-from modules.config import CLIENT_LOG_FILE, LOG_DIR, load_api_config, load_security_config, load_upload_config
+from modules.config import load_api_config, load_security_config, load_upload_config
+from modules.logging_config import load_logging_config
 from modules.routes import register_routes
 from modules.sockets import register_socket_handlers
 from modules.state import AppState
@@ -17,6 +18,7 @@ app.config["SECRET_KEY"] = "dev"
 UPLOAD_CONFIG = load_upload_config()
 API_CONFIG = load_api_config()
 SECURITY_CONFIG = load_security_config()
+LOGGING_CONFIG = load_logging_config()
 
 socketio = SocketIO(
     app,
@@ -40,8 +42,7 @@ register_routes(
     API_CONFIG,
     SECURITY_CONFIG,
     state,
-    LOG_DIR,
-    CLIENT_LOG_FILE,
+    LOGGING_CONFIG.client_log,
 )
 register_socket_handlers(socketio, state)
 

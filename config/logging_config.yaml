@@ -1,0 +1,5 @@
+logging:
+  client_log:
+    path: logs/client.log
+    max_bytes: 10485760
+    backup_count: 5

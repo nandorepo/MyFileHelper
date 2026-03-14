@@ -2,6 +2,8 @@
 
 import json
 from datetime import datetime
+from logging.handlers import RotatingFileHandler
+import logging
 from uuid import uuid4
 
 from flask import jsonify, render_template, request, session
@@ -22,7 +24,19 @@ from .upload_service import (
 )
 
 
-def register_routes(app, socketio, upload_config, api_config, security_config, state, log_dir, client_log_file) -> None:
+def register_routes(app, socketio, upload_config, api_config, security_config, state, client_log_config) -> None:
+    client_log_config.path.parent.mkdir(parents=True, exist_ok=True)
+    client_log_handler = RotatingFileHandler(
+        client_log_config.path,
+        maxBytes=client_log_config.max_bytes,
+        backupCount=client_log_config.backup_count,
+        encoding="utf-8",
+    )
+    client_log_handler.setLevel(0)
+    client_log_handler.setFormatter(None)
+    client_log_logger = logging.getLogger("client_log")
+    client_log_logger.propagate = False
+    client_log_logger.addHandler(client_log_handler)
     @app.after_request
     def disable_cache(response):
         response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
@@ -375,9 +389,7 @@ def register_routes(app, socketio, upload_config, api_config, security_config, s
             "page": data.get("page", request.path),
             "ua": request.headers.get("User-Agent", ""),
         }
-        log_dir.mkdir(parents=True, exist_ok=True)
-        with client_log_file.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        client_log_logger.info(json.dumps(entry, ensure_ascii=False))
         return "", 204
 
     @app.get("/__health")
