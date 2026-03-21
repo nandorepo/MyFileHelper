@@ -26,6 +26,10 @@ const I18N = {
     unsupportedPreview: "Unsupported file preview",
     clickToPreview: "Click file name to preview",
     download: "Download",
+    saveAs: "Save as",
+    copyLink: "Copy link",
+    copyLinkFailed: "Copy link failed",
+    saveAsFailed: "Save failed",
     waiting: "Waiting",
     initializing: "Initializing",
     initFailed: "Init failed",
@@ -57,6 +61,10 @@ const I18N = {
     unsupportedPreview: "暂不支持该文件预览",
     clickToPreview: "点击文件名进行预览",
     download: "下载",
+    saveAs: "另存为",
+    copyLink: "复制链接",
+    copyLinkFailed: "复制链接失败",
+    saveAsFailed: "保存失败",
     waiting: "等待中",
     initializing: "初始化中",
     initFailed: "初始化失败",
@@ -285,6 +293,7 @@ function initApp(socket) {
   let pausedWasConnected = false;
   let pickerRequestedAt = 0;
   let pickerSafetyTimer = null;
+  let fileContextMenu = null;
 
   function requestSocketPause(reason) {
     if (!socket || !pauseSocketOnAndroidUpload || !isAndroid) {
@@ -435,6 +444,148 @@ function initApp(socket) {
     return appendQueryParam(getInlineFileUrl(file), "download", "1");
   }
 
+  function getAbsoluteFileUrl(file) {
+    const url = getDownloadFileUrl(file) || getInlineFileUrl(file);
+    if (!url) {
+      return "";
+    }
+    return new URL(url, window.location.href).toString();
+  }
+
+  function triggerBrowserDownload(file) {
+    const href = getDownloadFileUrl(file);
+    if (!href) {
+      return;
+    }
+    const anchor = document.createElement("a");
+    anchor.href = href;
+    anchor.download = getFileName(file);
+    anchor.rel = "noopener noreferrer";
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+  }
+
+  async function saveFileAs(file) {
+    if (typeof window.showSaveFilePicker !== "function") {
+      triggerBrowserDownload(file);
+      return;
+    }
+
+    const downloadUrl = getAbsoluteFileUrl(file);
+    if (!downloadUrl) {
+      return;
+    }
+
+    let handle;
+    markPickerRequest();
+    try {
+      handle = await window.showSaveFilePicker({
+        suggestedName: getFileName(file),
+      });
+    } finally {
+      endPickerPause();
+    }
+
+    if (!handle) {
+      return;
+    }
+
+    const response = await fetch(downloadUrl, { credentials: "same-origin" });
+    if (!response.ok) {
+      throw new Error(`download failed: ${response.status}`);
+    }
+
+    const writable = await handle.createWritable();
+    try {
+      await writable.write(await response.blob());
+      await writable.close();
+    } catch (error) {
+      await writable.abort();
+      throw error;
+    }
+  }
+
+  function hideFileContextMenu() {
+    if (!fileContextMenu) {
+      return;
+    }
+    fileContextMenu.classList.add("hidden");
+    fileContextMenu.style.left = "";
+    fileContextMenu.style.top = "";
+    fileContextMenu._file = null;
+  }
+
+  function ensureFileContextMenu() {
+    if (fileContextMenu) {
+      return fileContextMenu;
+    }
+    const menu = document.createElement("div");
+    menu.className = "file-context-menu hidden";
+    menu.innerHTML = `
+      <button type="button" class="file-context-action" data-action="download"></button>
+      <button type="button" class="file-context-action" data-action="saveAs"></button>
+      <button type="button" class="file-context-action" data-action="copyLink"></button>
+    `;
+
+    menu.addEventListener("click", async (event) => {
+      const action = event.target && event.target.dataset ? event.target.dataset.action : "";
+      const file = menu._file;
+      hideFileContextMenu();
+      if (!file || !action) {
+        return;
+      }
+
+      try {
+        if (action === "download") {
+          triggerBrowserDownload(file);
+          return;
+        }
+        if (action === "saveAs") {
+          await saveFileAs(file);
+          return;
+        }
+        if (action === "copyLink") {
+          await navigator.clipboard.writeText(getAbsoluteFileUrl(file));
+        }
+      } catch (error) {
+        const messageKey = action === "copyLink" ? "copyLinkFailed" : "saveAsFailed";
+        logError(messageKey, error);
+        window.alert(t(messageKey));
+      }
+    });
+
+    document.body.appendChild(menu);
+    fileContextMenu = menu;
+    return menu;
+  }
+
+  function showFileContextMenu(event, file) {
+    const menu = ensureFileContextMenu();
+    menu._file = file;
+    const labels = {
+      download: t("download"),
+      saveAs: t("saveAs"),
+      copyLink: t("copyLink"),
+    };
+
+    menu.querySelectorAll(".file-context-action").forEach((button) => {
+      const action = button.dataset.action;
+      button.textContent = labels[action] || action;
+    });
+
+    menu.classList.remove("hidden");
+    menu.style.left = "0px";
+    menu.style.top = "0px";
+
+    const menuWidth = menu.offsetWidth;
+    const menuHeight = menu.offsetHeight;
+    const left = Math.min(event.clientX, window.innerWidth - menuWidth - 8);
+    const top = Math.min(event.clientY, window.innerHeight - menuHeight - 8);
+    menu.style.left = `${Math.max(8, left)}px`;
+    menu.style.top = `${Math.max(8, top)}px`;
+  }
+
   function isImageFile(file) {
     return getFileMime(file).startsWith("image/");
   }
@@ -504,6 +655,12 @@ function initApp(socket) {
     const name = document.createElement(clickablePreview ? "a" : "div");
     name.className = "file-name";
     name.textContent = fileName;
+    name.title = t("saveAs");
+    name.addEventListener("contextmenu", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      showFileContextMenu(event, file);
+    });
     if (clickablePreview) {
       name.classList.add("preview-link");
       name.href = inlineUrl;
@@ -1016,6 +1173,21 @@ function initApp(socket) {
 
   terminalMore.addEventListener("click", () => {
     terminalDropdown.classList.toggle("hidden");
+  });
+
+  document.addEventListener("click", () => {
+    hideFileContextMenu();
+  });
+  document.addEventListener("scroll", () => {
+    hideFileContextMenu();
+  }, true);
+  window.addEventListener("resize", () => {
+    hideFileContextMenu();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      hideFileContextMenu();
+    }
   });
 
   window.addEventListener("resize", updateOverflow);
