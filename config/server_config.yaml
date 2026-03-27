@@ -1,0 +1,24 @@
+pagination:
+  default_limit: 50
+  hard_cap: 500
+  target_response_bytes: 2097152
+
+socketio:
+  ping_interval: 30
+  ping_timeout: 120
+  cors_allowed_origins: "*"
+
+autoindex:
+  enabled: true
+
+access_control:
+  enabled: true
+  allowed_networks:
+    - 127.0.0.1/32
+    - 192.168.1.0/24
+
+logging:
+  client_log:
+    path: logs/client.log
+    max_bytes: 10485760
+    backup_count: 5

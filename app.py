@@ -6,25 +6,22 @@ from flask import Flask
 from flask_socketio import SocketIO
 
 from modules.cleanup import clean_upload_dirs
-from modules.config import load_api_config, load_security_config, load_upload_config
-from modules.logging_config import load_logging_config
+from modules.config import load_server_config, load_upload_config
 from modules.routes import register_routes
 from modules.sockets import register_socket_handlers
 from modules.state import AppState
 
 app = Flask(__name__)
-app.config["SECRET_KEY"] = "dev"
+app.config["SECRET_KEY"] = "d76vaS9lR64SdGl8DA"
 
 UPLOAD_CONFIG = load_upload_config()
-API_CONFIG = load_api_config()
-SECURITY_CONFIG = load_security_config()
-LOGGING_CONFIG = load_logging_config()
+SERVER_CONFIG = load_server_config()
 
 socketio = SocketIO(
     app,
-    cors_allowed_origins=API_CONFIG.socketio_cors_allowed_origins,
-    ping_interval=API_CONFIG.socketio_ping_interval,
-    ping_timeout=API_CONFIG.socketio_ping_timeout,
+    cors_allowed_origins=SERVER_CONFIG.socketio_cors_allowed_origins,
+    ping_interval=SERVER_CONFIG.socketio_ping_interval,
+    ping_timeout=SERVER_CONFIG.socketio_ping_timeout,
 )
 
 UPLOAD_CONFIG.upload_dir.mkdir(parents=True, exist_ok=True)
@@ -39,10 +36,9 @@ register_routes(
     app,
     socketio,
     UPLOAD_CONFIG,
-    API_CONFIG,
-    SECURITY_CONFIG,
+    SERVER_CONFIG,
     state,
-    LOGGING_CONFIG.client_log,
+    SERVER_CONFIG.client_log,
 )
 register_socket_handlers(socketio, state)
 

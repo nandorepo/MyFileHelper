@@ -8,8 +8,7 @@ import yaml
 LOG_DIR = Path("logs")
 CLIENT_LOG_FILE = LOG_DIR / "client.log"
 UPLOAD_CONFIG_PATH = Path("config/upload_config.yaml")
-API_CONFIG_PATH = Path("config/api_config.yaml")
-SECURITY_CONFIG_PATH = Path("config/security_config.yaml")
+SERVER_CONFIG_PATH = Path("config/server_config.yaml")
 
 
 @dataclass
@@ -48,40 +47,24 @@ class UploadConfig:
 
 
 @dataclass
-class ApiConfig:
-    base_path: str
-    default_version: str
-    supported_versions: list[str]
-    enable_versionless_alias: bool
+class ClientLogConfig:
+    path: Path
+    max_bytes: int
+    backup_count: int
+
+
+@dataclass
+class ServerConfig:
     pagination_default_limit: int
     pagination_hard_cap: int
     pagination_target_response_bytes: int
     socketio_ping_interval: int
     socketio_ping_timeout: int
     socketio_cors_allowed_origins: str | list[str]
-
-
-@dataclass
-class SecurityConfig:
-    auth_enabled: bool
-    auth_mode: str
-    auth_header_name: str
-    auth_api_keys: list[str]
-    auth_bearer_tokens: list[str]
-    docs_enabled: bool
-    docs_swagger_path: str
-    docs_openapi_path: str
-    docs_redoc_path: str
-    docs_acl_enabled: bool
-    docs_allow_ips: list[str]
-    docs_allow_cidrs: list[str]
-    docs_trust_x_forwarded_for: bool
-    docs_auth_enabled: bool
-    docs_auth_type: str
-    docs_auth_username: str
-    docs_auth_password: str
-    docs_auth_header_name: str
-    docs_auth_api_key: str
+    client_log: ClientLogConfig
+    autoindex_enabled: bool
+    access_control_enabled: bool
+    allowed_networks: list[str]
 
 
 def _load_yaml(path: Path) -> dict:
@@ -135,33 +118,38 @@ def load_upload_config() -> UploadConfig:
     )
 
 
-def load_api_config() -> ApiConfig:
-    defaults = ApiConfig(
-        base_path="/api",
-        default_version="v1",
-        supported_versions=["v1"],
-        enable_versionless_alias=True,
+def load_server_config() -> ServerConfig:
+    defaults = ServerConfig(
         pagination_default_limit=50,
         pagination_hard_cap=500,
         pagination_target_response_bytes=2 * 1024 * 1024,
         socketio_ping_interval=25,
         socketio_ping_timeout=120,
         socketio_cors_allowed_origins="*",
+        client_log=ClientLogConfig(
+            path=Path("logs/client.log"),
+            max_bytes=10 * 1024 * 1024,
+            backup_count=5,
+        ),
+        autoindex_enabled=False,
+        access_control_enabled=False,
+        allowed_networks=[],
     )
-    data = _load_yaml(API_CONFIG_PATH)
+    data = _load_yaml(SERVER_CONFIG_PATH)
 
-    api = data.get("api", {}) or {}
     pagination = data.get("pagination", {}) or {}
     socketio_conf = data.get("socketio", {}) or {}
-    supported_versions = api.get("supported_versions", defaults.supported_versions)
-    if not isinstance(supported_versions, list) or not supported_versions:
-        supported_versions = defaults.supported_versions
+    logging_conf = data.get("logging", {}) or {}
+    client_conf = logging_conf.get("client_log", {}) or {}
 
-    return ApiConfig(
-        base_path=str(api.get("base_path", defaults.base_path)).strip() or defaults.base_path,
-        default_version=str(api.get("default_version", defaults.default_version)).strip() or defaults.default_version,
-        supported_versions=[str(v).strip() for v in supported_versions if str(v).strip()] or defaults.supported_versions,
-        enable_versionless_alias=bool(api.get("enable_versionless_alias", defaults.enable_versionless_alias)),
+    path_raw = str(client_conf.get("path", defaults.client_log.path)).strip() or str(defaults.client_log.path)
+    max_bytes = int(client_conf.get("max_bytes", defaults.client_log.max_bytes))
+    backup_count = int(client_conf.get("backup_count", defaults.client_log.backup_count))
+
+    autoindex_conf = data.get("autoindex", {}) or {}
+    access_control = data.get("access_control", {}) or {}
+
+    return ServerConfig(
         pagination_default_limit=int(pagination.get("default_limit", defaults.pagination_default_limit)),
         pagination_hard_cap=int(pagination.get("hard_cap", defaults.pagination_hard_cap)),
         pagination_target_response_bytes=int(
@@ -173,80 +161,12 @@ def load_api_config() -> ApiConfig:
             "cors_allowed_origins",
             defaults.socketio_cors_allowed_origins,
         ),
-    )
-
-
-def load_security_config() -> SecurityConfig:
-    defaults = SecurityConfig(
-        auth_enabled=False,
-        auth_mode="api_key",
-        auth_header_name="X-API-Key",
-        auth_api_keys=[],
-        auth_bearer_tokens=[],
-        docs_enabled=True,
-        docs_swagger_path="/docs",
-        docs_openapi_path="/openapi.json",
-        docs_redoc_path="/redoc",
-        docs_acl_enabled=True,
-        docs_allow_ips=["127.0.0.1", "::1"],
-        docs_allow_cidrs=["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"],
-        docs_trust_x_forwarded_for=False,
-        docs_auth_enabled=False,
-        docs_auth_type="basic",
-        docs_auth_username="admin",
-        docs_auth_password="change-me",
-        docs_auth_header_name="X-Docs-Key",
-        docs_auth_api_key="change-me",
-    )
-    data = _load_yaml(SECURITY_CONFIG_PATH)
-
-    auth = data.get("auth", {}) or {}
-    docs = data.get("docs", {}) or {}
-    docs_paths = docs.get("paths", {}) or {}
-    docs_acl = docs.get("access_control", {}) or {}
-    docs_auth = docs.get("auth", {}) or {}
-
-    keys_raw = auth.get("keys", [])
-    api_keys: list[str] = []
-    if isinstance(keys_raw, list):
-        for item in keys_raw:
-            if isinstance(item, dict):
-                key_value = str(item.get("key_value", "")).strip()
-                if key_value:
-                    api_keys.append(key_value)
-            else:
-                key_value = str(item).strip()
-                if key_value:
-                    api_keys.append(key_value)
-
-    tokens_raw = auth.get("bearer_tokens", [])
-    bearer_tokens = [str(v).strip() for v in tokens_raw if str(v).strip()] if isinstance(tokens_raw, list) else []
-
-    return SecurityConfig(
-        auth_enabled=bool(auth.get("enabled", defaults.auth_enabled)),
-        auth_mode=str(auth.get("mode", defaults.auth_mode)).strip() or defaults.auth_mode,
-        auth_header_name=str(auth.get("headerName", defaults.auth_header_name)).strip() or defaults.auth_header_name,
-        auth_api_keys=api_keys,
-        auth_bearer_tokens=bearer_tokens,
-        docs_enabled=bool(docs.get("enabled", defaults.docs_enabled)),
-        docs_swagger_path=str(docs_paths.get("swagger_ui", defaults.docs_swagger_path)).strip() or defaults.docs_swagger_path,
-        docs_openapi_path=str(docs_paths.get("openapi_json", defaults.docs_openapi_path)).strip()
-        or defaults.docs_openapi_path,
-        docs_redoc_path=str(docs_paths.get("redoc", defaults.docs_redoc_path)).strip() or defaults.docs_redoc_path,
-        docs_acl_enabled=bool(docs_acl.get("enabled", defaults.docs_acl_enabled)),
-        docs_allow_ips=[str(v).strip() for v in docs_acl.get("allow_ips", defaults.docs_allow_ips) if str(v).strip()],
-        docs_allow_cidrs=[
-            str(v).strip() for v in docs_acl.get("allow_cidrs", defaults.docs_allow_cidrs) if str(v).strip()
-        ],
-        docs_trust_x_forwarded_for=bool(
-            docs_acl.get("trust_x_forwarded_for", defaults.docs_trust_x_forwarded_for)
+        client_log=ClientLogConfig(
+            path=Path(path_raw),
+            max_bytes=max_bytes,
+            backup_count=backup_count,
         ),
-        docs_auth_enabled=bool(docs_auth.get("enabled", defaults.docs_auth_enabled)),
-        docs_auth_type=str(docs_auth.get("type", defaults.docs_auth_type)).strip() or defaults.docs_auth_type,
-        docs_auth_username=str(docs_auth.get("username", defaults.docs_auth_username)).strip() or defaults.docs_auth_username,
-        docs_auth_password=str(docs_auth.get("password", defaults.docs_auth_password)),
-        docs_auth_header_name=str(docs_auth.get("header_name", defaults.docs_auth_header_name)).strip()
-        or defaults.docs_auth_header_name,
-        docs_auth_api_key=str(docs_auth.get("api_key", defaults.docs_auth_api_key)).strip()
-        or defaults.docs_auth_api_key,
+        autoindex_enabled=bool(autoindex_conf.get("enabled", defaults.autoindex_enabled)),
+        access_control_enabled=bool(access_control.get("enabled", defaults.access_control_enabled)),
+        allowed_networks=list(access_control.get("allowed_networks", defaults.allowed_networks) or []),
     )

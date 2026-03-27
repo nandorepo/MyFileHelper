@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
+from uuid import uuid4
 
 from flask import send_file
+from werkzeug.utils import secure_filename
 
-from .api_utils import download_path_for, utc_now_iso
+from .response_utils import utc_now_iso
 from .state import Message
 
 
@@ -25,6 +28,45 @@ def choose_chunk_size(upload_config, upload_sessions: dict, expected_size: int |
     chunk_size = max(chunk_size, upload_config.min_chunk_size_bytes)
     chunk_size = min(chunk_size, upload_config.max_chunk_size_bytes)
     return chunk_size
+
+
+def create_upload_session(upload_config, upload_sessions: dict, *, filename: str, size: int, mime: str, client_msg_id: str) -> dict:
+    upload_id = str(uuid4())
+    upload_sessions[upload_id] = {
+        "filename": filename,
+        "size": size,
+        "mime": mime,
+        "client_msg_id": client_msg_id,
+        "created_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+    }
+    (upload_config.chunk_dir / upload_id).mkdir(parents=True, exist_ok=True)
+    return {
+        "upload_id": upload_id,
+        "chunk_size": choose_chunk_size(upload_config, upload_sessions, size),
+        "max_concurrency": upload_config.max_concurrency,
+        "max_file_size_bytes": upload_config.max_file_size_bytes,
+    }
+
+
+def save_upload_chunk(upload_config, upload_sessions: dict, *, upload_id: str, index: int, total_chunks: int, chunk_stream) -> dict:
+    if upload_id not in upload_sessions:
+        raise KeyError("upload session not found")
+    if index < 0 or total_chunks <= 0 or index >= total_chunks:
+        raise IndexError("chunk index out of range")
+
+    chunk_dir = upload_config.chunk_dir / upload_id
+    chunk_dir.mkdir(parents=True, exist_ok=True)
+    chunk_path = chunk_dir / f"chunk_{index:06d}.part"
+
+    with chunk_path.open("wb") as output:
+        chunk_stream.seek(0)
+        while True:
+            data = chunk_stream.read(1024 * 1024)
+            if not data:
+                break
+            output.write(data)
+
+    return {"upload_id": upload_id, "index": index}
 
 
 def save_stream_to_file(stream, destination: Path, upload_config) -> int:
@@ -93,6 +135,84 @@ def merge_chunks(upload_id: str, total_chunks: int, destination: Path, upload_co
     return bytes_written
 
 
+def finalize_upload_session(upload_config, upload_sessions: dict, uploaded_files: dict, *, upload_id: str, total_chunks: int) -> dict:
+    session_info = upload_sessions.pop(upload_id)
+    safe_name = secure_filename(session_info["filename"]) or f"{upload_id}.bin"
+    stored_name = f"{upload_id}_{safe_name}"
+    final_path = upload_config.upload_dir / stored_name
+
+    merged_bytes = merge_chunks(upload_id, total_chunks, final_path, upload_config)
+    declared_size = int(session_info.get("size") or 0)
+    if declared_size > 0 and merged_bytes != declared_size:
+        final_path.unlink(missing_ok=True)
+        raise RuntimeError("merged size does not match declared size")
+
+    return store_uploaded_file(
+        file_id=upload_id,
+        original_name=session_info["filename"],
+        stored_name=stored_name,
+        size=merged_bytes,
+        mime=session_info.get("mime") or "",
+        client_msg_id=session_info.get("client_msg_id") or "",
+        uploaded_files=uploaded_files,
+    )
+
+
+def store_auto_uploaded_file(
+    upload_config,
+    upload_sessions: dict,
+    uploaded_files: dict,
+    *,
+    upload_stream,
+    filename: str,
+    mime: str,
+    client_msg_id: str,
+    chunked: bool,
+    expected_size: int | None = None,
+) -> tuple[dict, int]:
+    file_id = str(uuid4())
+    safe_name = secure_filename(filename or "") or f"{file_id}.bin"
+    stored_name = f"{file_id}_{safe_name}"
+    final_path = upload_config.upload_dir / stored_name
+
+    try:
+        if chunked:
+            total_chunks, bytes_written = save_stream_as_chunks(
+                upload_stream,
+                file_id,
+                upload_config,
+                upload_sessions,
+                expected_size,
+            )
+            if total_chunks == 0:
+                raise EOFError("empty file")
+            merged_bytes = merge_chunks(file_id, total_chunks, final_path, upload_config)
+            if merged_bytes != bytes_written:
+                final_path.unlink(missing_ok=True)
+                raise RuntimeError("merge verification failed")
+            actual_size = merged_bytes
+        else:
+            actual_size = save_stream_to_file(upload_stream, final_path, upload_config)
+            if actual_size <= 0:
+                final_path.unlink(missing_ok=True)
+                raise EOFError("empty file")
+    except Exception:
+        if final_path.exists():
+            final_path.unlink(missing_ok=True)
+        raise
+
+    entry = store_uploaded_file(
+        file_id=file_id,
+        original_name=filename or safe_name,
+        stored_name=stored_name,
+        size=actual_size,
+        mime=mime,
+        client_msg_id=client_msg_id,
+        uploaded_files=uploaded_files,
+    )
+    return entry, choose_chunk_size(upload_config, upload_sessions, expected_size)
+
+
 def store_uploaded_file(
     *,
     file_id: str,
@@ -102,10 +222,9 @@ def store_uploaded_file(
     mime: str,
     client_msg_id: str,
     uploaded_files: dict,
-    api_config,
 ) -> dict:
     media_url = f"/media/{file_id}"
-    download_url = download_path_for(file_id, api_config, versioned=True)
+    download_url = f"/media/{file_id}?download=1"
     entry = {
         "file_id": file_id,
         "original_name": original_name,
@@ -117,28 +236,30 @@ def store_uploaded_file(
         # Legacy UI preview uses file.url directly, so keep inline media URL here.
         "url": media_url,
         "download_url": download_url,
-        "alias_url": download_path_for(file_id, api_config, versioned=False),
+        "alias_url": download_url,
     }
     uploaded_files[file_id] = entry
     return entry
 
 
-def serialize_attachment(entry: dict, api_config) -> dict:
+def serialize_attachment(entry: dict) -> dict:
     return {
         "file_id": entry.get("file_id"),
         "filename": entry.get("original_name"),
         "size": entry.get("size"),
         "mime_type": entry.get("mime"),
-        "url": entry.get("download_url")
-        or download_path_for(entry.get("file_id", ""), api_config, versioned=True),
+        "url": entry.get("download_url") or f"/media/{entry.get('file_id', '')}?download=1",
+        "download_url": entry.get("download_url") or f"/media/{entry.get('file_id', '')}?download=1",
+        "alias_url": entry.get("alias_url") or f"/media/{entry.get('file_id', '')}?download=1",
+        "inline_url": entry.get("url") or f"/media/{entry.get('file_id', '')}",
     }
 
 
-def serialize_message(message: Message, api_config) -> dict:
+def serialize_message(message: Message) -> dict:
     attachments = []
     source = message.attachments or ([] if message.file is None else [message.file])
     for entry in source:
-        attachments.append(serialize_attachment(entry, api_config))
+        attachments.append(serialize_attachment(entry))
 
     return {
         "id": message.msg_id,
@@ -151,10 +272,10 @@ def serialize_message(message: Message, api_config) -> dict:
     }
 
 
-def send_entry(entry: dict, upload_config, api_config, api_error, *, as_attachment: bool):
+def send_entry(entry: dict, upload_config, error_response, *, as_attachment: bool):
     file_path = upload_config.upload_dir / entry["stored_name"]
     if not file_path.exists():
-        return api_error("file not found", 404, 40401)
+        return error_response("file not found", 404, 40401)
 
     return send_file(
         file_path,

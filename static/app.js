@@ -1,10 +1,17 @@
 ﻿﻿const DEBUG = true;
 const REGISTER_ACK_TIMEOUT_MS = 8000;
-const CLIENT_LOG_ENDPOINT = "/api/client-log";
-const TERMINAL_NAME_STORAGE_KEY = "mytransfer_terminal_name";
-const UPLOAD_INIT_ENDPOINT = "/api/upload/init";
-const UPLOAD_CHUNK_ENDPOINT = "/api/upload/chunk";
-const UPLOAD_COMPLETE_ENDPOINT = "/api/upload/complete";
+const CLIENT_LOG_ENABLED = false; // 旧 API 已移除，客户端日志不上报
+
+function getBrowserStorageKey() {
+  const ua = (navigator.userAgent || "").toLowerCase();
+  if (ua.includes("edg/")) {
+    return "mytransfer_terminal_name_edge";
+  }
+  if (ua.includes("chrome/")) {
+    return "mytransfer_terminal_name_chrome";
+  }
+  return "mytransfer_terminal_name";
+}
 
 const SUPPORTED_LOCALES = {
   zh: "zh-CN",
@@ -151,6 +158,10 @@ function serializeLogValue(value, depth = 0) {
 }
 
 function sendClientLog(level, args) {
+  if (!CLIENT_LOG_ENABLED) {
+    return;
+  }
+
   const payload = {
     ts: new Date().toISOString(),
     level,
@@ -158,7 +169,7 @@ function sendClientLog(level, args) {
     args: args.map((item) => serializeLogValue(item)),
   };
 
-  fetch(CLIENT_LOG_ENDPOINT, {
+  fetch("/ui/client-log", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -363,7 +374,8 @@ function initApp(socket) {
   }
 
   try {
-    const cached = (localStorage.getItem(TERMINAL_NAME_STORAGE_KEY) || "").trim();
+    const key = getBrowserStorageKey();
+    const cached = (localStorage.getItem(key) || "").trim();
     if (cached) {
       currentUsername = cached;
       loginInput.value = cached;
@@ -422,7 +434,7 @@ function initApp(socket) {
   }
 
   function getInlineFileUrl(file) {
-    return file.url || file.download_url || file.alias_url || "";
+    return file.inline_url || file.url || file.alias_url || file.download_url || "";
   }
 
   function appendQueryParam(url, key, value) {
@@ -435,11 +447,14 @@ function initApp(socket) {
   }
 
   function getDownloadFileUrl(file) {
+    if (file.alias_url) {
+      return file.alias_url;
+    }
     if (file.download_url) {
       return file.download_url;
     }
     if (file.file_id) {
-      return `/api/v1/download/${file.file_id}`;
+      return `/media/${file.file_id}?download=1`;
     }
     return appendQueryParam(getInlineFileUrl(file), "download", "1");
   }
@@ -728,8 +743,10 @@ function initApp(socket) {
             original_name: first.filename,
             size: first.size,
             mime: first.mime_type,
-            url: first.url,
-            download_url: first.url,
+            url: first.inline_url || first.url,
+            inline_url: first.inline_url || first.url,
+            download_url: first.download_url || first.url,
+            alias_url: first.alias_url || "",
           };
           if (!message.text) {
             message.text = first.filename || t("unnamedFile");
@@ -829,43 +846,8 @@ function initApp(socket) {
   }
 
   async function syncMessagesAfterUpload() {
-    if (!isAndroid) {
-      return;
-    }
-    try {
-      const url = new URL("/api/messages", window.location.origin);
-      url.searchParams.set("limit", "50");
-      if (latestServerCreatedAt) {
-        url.searchParams.set("since", latestServerCreatedAt);
-      }
-      const resp = await fetch(url.toString());
-      const data = await resp.json();
-      const ok = resp.ok && (data.ok === true || data.code === 0);
-      if (!ok) {
-        throw new Error(data.error || data.message || "sync failed");
-      }
-      const payload = data.data || data;
-      const items = payload.items || [];
-      log("sync after upload items", items.length);
-      sendClientLog("info", ["sync_after_upload_items", items.length]);
-      items.forEach(renderMessage);
-      if (!items.length) {
-        const fallbackUrl = new URL("/api/messages", window.location.origin);
-        fallbackUrl.searchParams.set("limit", "20");
-        const fallbackResp = await fetch(fallbackUrl.toString());
-        const fallbackData = await fallbackResp.json();
-        const fallbackOk = fallbackResp.ok && (fallbackData.ok === true || fallbackData.code === 0);
-        if (fallbackOk) {
-          const fallbackPayload = fallbackData.data || fallbackData;
-          const fallbackItems = fallbackPayload.items || [];
-          log("fallback sync items", fallbackItems.length);
-          sendClientLog("info", ["fallback_sync_items", fallbackItems.length]);
-          fallbackItems.forEach(renderMessage);
-        }
-      }
-    } catch (error) {
-      logError("sync after upload failed", error);
-    }
+    // 旧的 REST 分页 API /ui/messages 已移除，实时消息由 Socket.IO 推送，无需轮询。
+    return;
   }
 
   function formatBytes(size) {
@@ -918,144 +900,101 @@ function initApp(socket) {
 
   async function uploadFile(file) {
     requestSocketPause("upload");
+
     const clientMsgId =
       typeof crypto !== "undefined" && crypto.randomUUID
         ? crypto.randomUUID()
         : `cm_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+
     const ui = createUploadItem(file);
     ui.status.textContent = t("initializing");
 
-    let initData;
-    let initPayload;
+    const form = new FormData();
+    form.append("file", file);
+    form.append("client_msg_id", clientMsgId);
+    form.append("chunked", "1");
+    form.append("create_message", "1");
+    form.append("mime_type", file.type || "");
+
     try {
-      const initResp = await fetch(UPLOAD_INIT_ENDPOINT, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          filename: file.name,
-          size: file.size,
-          mime: file.type,
+      const result = await new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open("POST", "/ui/upload");
+        xhr.responseType = "json";
+
+        xhr.upload.onprogress = (event) => {
+          if (!event.lengthComputable) return;
+          const percent = Math.min(100, Math.max(0, Math.round((event.loaded / event.total) * 100)));
+          ui.bar.style.width = `${percent}%`;
+          ui.status.textContent = `${t("uploading")} (${percent}%)`;
+        };
+
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            resolve(xhr.response);
+          } else {
+            reject(new Error(`upload failed: ${xhr.status}`));
+          }
+        };
+
+        xhr.onerror = () => reject(new Error("upload network error"));
+        xhr.onabort = () => reject(new Error("upload aborted"));
+
+        xhr.send(form);
+      });
+
+      const ok = result && (result.ok === true || result.code === 0);
+      if (!ok) {
+        throw new Error((result && (result.error || result.message)) || "upload failed");
+      }
+
+      const data = result.data || result;
+      const fileData = data.file;
+      const messageData = data.message;
+
+      const nowTs = new Date().toLocaleTimeString(currentLocale, { hour12: false });
+
+      if (messageData) {
+        const message = { ...messageData };
+        if (!message.ts) message.ts = nowTs;
+        if ((!message.file || !message.file.file_id) && fileData) {
+          const fileEntry = fileData;
+          message.file = {
+            file_id: fileEntry.file_id,
+            original_name: fileEntry.filename,
+            size: fileEntry.size,
+            mime: fileEntry.mime_type,
+            url: fileEntry.inline_url || fileEntry.url,
+            inline_url: fileEntry.inline_url || fileEntry.url,
+            download_url: fileEntry.download_url || fileEntry.url,
+            alias_url: fileEntry.alias_url || "",
+          };
+        }
+        if (!message.kind) message.kind = message.file ? "file" : "text";
+        renderMessage(message);
+      } else if (fileData) {
+        const fileEntry = fileData;
+        renderMessage({
+          user: currentUsername || t("selfName"),
+          ts: nowTs,
+          kind: "file",
+          text: fileEntry.filename || t("unnamedFile"),
+          file: {
+            file_id: fileEntry.file_id,
+            original_name: fileEntry.filename,
+            size: fileEntry.size,
+            mime: fileEntry.mime_type,
+            url: fileEntry.inline_url || fileEntry.url,
+            inline_url: fileEntry.inline_url || fileEntry.url,
+            download_url: fileEntry.download_url || fileEntry.url,
+            alias_url: fileEntry.alias_url || "",
+          },
           client_msg_id: clientMsgId,
-        }),
-      });
-      initData = await initResp.json();
-      const initSuccess = initResp.ok && (initData.ok === true || initData.code === 0);
-      if (!initSuccess) {
-        throw new Error(initData.error || initData.message || "Init failed");
+          created_at: new Date().toISOString(),
+          _local_only: true,
+        });
       }
-      initPayload = initData.data || initData;
-    } catch (error) {
-      ui.status.textContent = t("initFailed");
-      logError("upload init failed", error);
-      releaseSocketPause("upload-init-failed");
-      return;
-    }
 
-    const uploadId = initPayload.upload_id;
-    ui.item.dataset.uploadId = uploadId;
-    ui.item.dataset.clientMsgId = clientMsgId;
-    pendingUploads.set(uploadId, ui.item);
-    pendingUploads.set(clientMsgId, ui.item);
-    const chunkSize = initPayload.chunk_size || 10 * 1024 * 1024;
-    const totalChunks = Math.max(1, Math.ceil(file.size / chunkSize));
-    const concurrency = Math.min(initPayload.max_concurrency || 3, totalChunks);
-    let completed = 0;
-
-    async function uploadChunk(index) {
-      const start = index * chunkSize;
-      const end = Math.min(start + chunkSize, file.size);
-      const form = new FormData();
-      form.append("upload_id", uploadId);
-      form.append("index", index);
-      form.append("total_chunks", totalChunks);
-      form.append("chunk", file.slice(start, end), file.name);
-      const response = await fetch(UPLOAD_CHUNK_ENDPOINT, { method: "POST", body: form });
-      if (!response.ok) {
-        let message = `chunk ${index} failed`;
-        try {
-          const err = await response.json();
-          message = err.error || err.message || message;
-        } catch (_error) {
-          // ignore json parse errors
-        }
-        throw new Error(message);
-      }
-    }
-
-    const queue = Array.from({ length: totalChunks }, (_, index) => index);
-    ui.status.textContent = t("uploading");
-
-    async function worker() {
-      while (queue.length) {
-        const index = queue.shift();
-        if (index === undefined) {
-          return;
-        }
-        await uploadChunk(index);
-        completed += 1;
-        const percent = Math.round((completed / totalChunks) * 100);
-        ui.bar.style.width = `${percent}%`;
-        ui.status.textContent = `${formatBytes(file.size)} | ${percent}%`;
-      }
-    }
-
-    try {
-      await Promise.all(Array.from({ length: concurrency }, () => worker()));
-      const completeResp = await fetch(UPLOAD_COMPLETE_ENDPOINT, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ upload_id: uploadId, total_chunks: totalChunks }),
-      });
-      const completeData = await completeResp.json();
-      const completeSuccess = completeResp.ok && (completeData.ok === true || completeData.code === 0);
-      if (!completeSuccess) {
-        throw new Error(completeData.error || completeData.message || "Merge failed");
-      }
-      const payload = completeData.data || completeData;
-      if (payload) {
-        const nowTs = new Date().toLocaleTimeString(currentLocale, { hour12: false });
-        if (payload.message) {
-          const message = { ...payload.message };
-          if (!message.ts) {
-            message.ts = nowTs;
-          }
-          if ((!message.file || !message.file.file_id) && payload.file) {
-            const file = payload.file;
-            message.file = {
-              file_id: file.file_id,
-              original_name: file.filename,
-              size: file.size,
-              mime: file.mime_type,
-              url: file.url,
-              download_url: file.url,
-            };
-          }
-          if (!message.kind) {
-            message.kind = message.file ? "file" : "text";
-          }
-          renderMessage(message);
-        } else if (payload.file) {
-          const file = payload.file;
-          renderMessage({
-            user: currentUsername || t("selfName"),
-            ts: nowTs,
-            kind: "file",
-            text: file.filename || t("unnamedFile"),
-            file: {
-              file_id: file.file_id,
-              original_name: file.filename,
-              size: file.size,
-              mime: file.mime_type,
-              url: file.url,
-              download_url: file.url,
-            },
-            client_msg_id: clientMsgId,
-            created_at: new Date().toISOString(),
-            _local_only: true,
-          });
-        }
-      }
-      syncMessagesAfterUpload();
       ui.status.textContent = t("done");
       ui.bar.style.width = "100%";
     } catch (error) {
@@ -1064,6 +1003,16 @@ function initApp(socket) {
     } finally {
       releaseSocketPause("upload");
     }
+  }
+
+  function formatBytes(size) {
+    if (!Number.isFinite(size) || size <= 0) {
+      return "0 B";
+    }
+    const units = ["B", "KB", "MB", "GB", "TB"];
+    const index = Math.min(Math.floor(Math.log(size) / Math.log(1024)), units.length - 1);
+    const value = size / Math.pow(1024, index);
+    return `${value.toFixed(value >= 10 || index === 0 ? 0 : 1)} ${units[index]}`;
   }
 
   function updateOverflow() {
@@ -1099,7 +1048,8 @@ function initApp(socket) {
   function persistUsername(username) {
     currentUsername = username;
     try {
-      localStorage.setItem(TERMINAL_NAME_STORAGE_KEY, username);
+      const key = getBrowserStorageKey();
+      localStorage.setItem(key, username);
     } catch (_error) {
       // Ignore localStorage errors.
     }

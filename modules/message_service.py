@@ -6,7 +6,7 @@ from uuid import uuid4
 
 from flask import session
 
-from .api_utils import utc_now_iso
+from .response_utils import parse_utc, utc_now_iso
 from .state import AppState, Message
 
 
@@ -43,6 +43,45 @@ def default_username(state: AppState) -> str:
     if terminal_session_id and terminal_session_id in state.terminal_sessions:
         return state.terminal_sessions[terminal_session_id].get("username", "Anonymous")
     return "Anonymous"
+
+
+def list_messages(state: AppState, *, limit: int, cursor: int, since_raw: str = "") -> tuple[dict | None, str | None]:
+    filtered = state.messages
+    if since_raw:
+        since_dt = parse_utc(since_raw)
+        if since_dt is None:
+            return None, "invalid since timestamp"
+        filtered = [m for m in filtered if parse_utc(m.created_at or "") and parse_utc(m.created_at) >= since_dt]
+
+    total = len(filtered)
+    end = min(cursor + limit, total)
+    page = filtered[cursor:end]
+    next_cursor = str(end) if end < total else None
+
+    return {
+        "items": page,
+        "next_cursor": next_cursor,
+        "limit": limit,
+        "total": total,
+    }, None
+
+
+def resolve_attachments(uploaded_files: dict[str, dict], attachment_ids: list[str]) -> tuple[list[dict] | None, str | None]:
+    attachments: list[dict] = []
+    for file_id in attachment_ids:
+        entry = uploaded_files.get(file_id)
+        if not entry:
+            return None, file_id
+        attachments.append(entry)
+    return attachments, None
+
+
+def determine_message_kind(text: str, attachments: list[dict]) -> str:
+    if attachments and text:
+        return "mixed"
+    if attachments:
+        return "file"
+    return "text"
 
 
 def client_names(state: AppState) -> list[str]:
