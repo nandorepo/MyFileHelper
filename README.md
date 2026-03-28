@@ -8,8 +8,7 @@ A LAN messaging and file-sharing tool built with Flask + Flask-SocketIO (data is
 
 - Real-time message sync (Socket.IO)
 - File upload and download
-- Manual chunk upload flow: `init -> chunk -> complete`
-- Browser auto upload (optional server-side chunking)
+- Drag-and-drop browser upload (automatic chunking for large files)
 
 ## Requirements
 
