@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 from pathlib import Path
 
 import yaml
@@ -73,8 +74,25 @@ def _load_yaml(path: Path) -> dict:
     try:
         with path.open("r", encoding="utf-8") as f:
             return yaml.safe_load(f) or {}
-    except yaml.YAMLError:
+    except (yaml.YAMLError, OSError, UnicodeDecodeError) as exc:
+        logging.getLogger(__name__).warning("failed to load config file %s: %s", path, exc)
         return {}
+
+
+def _as_bool(raw, default: bool) -> bool:
+    if isinstance(raw, bool):
+        return raw
+    if raw is None:
+        return default
+    if isinstance(raw, (int, float)):
+        return raw != 0
+
+    value = str(raw).strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    return default
 
 
 def load_upload_config() -> UploadConfig:
@@ -109,8 +127,8 @@ def load_upload_config() -> UploadConfig:
         min_chunk_size_mb=int(chunking.get("minChunkSizeMB", defaults.min_chunk_size_mb)),
         max_chunk_size_mb=int(chunking.get("maxChunkSizeMB", defaults.max_chunk_size_mb)),
         max_concurrency=int(chunking.get("maxConcurrency", defaults.max_concurrency)),
-        auto_chunk_enabled=bool(auto_chunk.get("enabled", defaults.auto_chunk_enabled)),
-        auto_chunk_default_enabled=bool(auto_chunk.get("defaultEnabled", defaults.auto_chunk_default_enabled)),
+        auto_chunk_enabled=_as_bool(auto_chunk.get("enabled"), defaults.auto_chunk_enabled),
+        auto_chunk_default_enabled=_as_bool(auto_chunk.get("defaultEnabled"), defaults.auto_chunk_default_enabled),
         high_concurrency_threshold=int(
             auto_chunk.get("highConcurrencyThreshold", defaults.high_concurrency_threshold)
         ),
@@ -166,7 +184,7 @@ def load_server_config() -> ServerConfig:
             max_bytes=max_bytes,
             backup_count=backup_count,
         ),
-        autoindex_enabled=bool(autoindex_conf.get("enabled", defaults.autoindex_enabled)),
-        access_control_enabled=bool(access_control.get("enabled", defaults.access_control_enabled)),
+        autoindex_enabled=_as_bool(autoindex_conf.get("enabled"), defaults.autoindex_enabled),
+        access_control_enabled=_as_bool(access_control.get("enabled"), defaults.access_control_enabled),
         allowed_networks=list(access_control.get("allowed_networks", defaults.allowed_networks) or []),
     )

@@ -66,6 +66,56 @@ python app.py
 
 - 前端文件预览使用内联媒体地址（`/media/{file_id}`）。
 - 浏览器端通过 `/ui/*` 下的内部路由完成消息和上传操作。
+- 前端可维护性与学习说明：`docs/frontend-maintainability.md`
+
+## API 响应契约
+
+JSON API 统一使用 `modules/response_utils.py` 定义的外壳：
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {}
+}
+```
+
+- `code = 0` 表示成功
+- `message` 是稳定的人类可读摘要
+- `data` 承载成功数据；错误场景固定返回 `null`
+
+错误示例：
+
+```json
+{
+  "code": 40015,
+  "message": "file is required",
+  "data": null
+}
+```
+
+以下路由不属于统一 JSON 成功响应契约：
+
+- `/files` 返回 HTML
+- `/media/<file_id>` 成功时返回文件内容；当条目不存在时返回纯文本 `404`
+- `/ui/client-log` 返回 HTTP `204 No Content`
+
+## 错误码
+
+常用 API 错误码定义在 `modules/error_codes.py`，完整说明见：
+
+- `docs/error-codes.md`
+- 按端点反查入口：`docs/error-codes.md#endpoint-reverse-lookup`
+
+快速确认时，可按如下错误响应外壳检查：
+
+```json
+{
+  "code": 40015,
+  "message": "file is required",
+  "data": null
+}
+```
 
 ## 已知行为与限制
 
@@ -77,3 +127,11 @@ python app.py
 ## 常见调试
 
 - 查看 `logs/client.log` 排查前端连接与上传错误。
+
+## 代码质量与测试
+
+```powershell
+pip install -r quality/requirements-dev.txt
+ruff check .
+pytest
+```

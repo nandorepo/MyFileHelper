@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from threading import Lock
+from threading import Lock, RLock
 from typing import Dict, List
 
 
@@ -27,3 +27,5 @@ class AppState:
     upload_sessions: Dict[str, dict] = field(default_factory=dict)
     uploaded_files: Dict[str, dict] = field(default_factory=dict)
     clients_lock: Lock = field(default_factory=Lock)
+    messages_lock: RLock = field(default_factory=RLock)
+    uploads_lock: RLock = field(default_factory=RLock)

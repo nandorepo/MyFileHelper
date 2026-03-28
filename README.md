@@ -70,7 +70,65 @@ Key fields:
 ## Frontend Integration Notes
 
 - Frontend file preview uses inline media URLs (`/media/{file_id}`).
-- Browser actions使用基于 Socket.IO 的实时消息，不再依赖 `/ui/*` REST API 端点。
+- Browser actions use Socket.IO for realtime sync and also expose `/ui/*` endpoints for HTTP integration.
+- Frontend maintainability and learning notes: `docs/frontend-maintainability.md`
+
+## API Response Contract
+
+JSON API endpoints use a single envelope defined in `modules/response_utils.py`:
+
+```json
+{
+  "code": 0,
+  "message": "ok",
+  "data": {}
+}
+```
+
+- `code = 0` means success
+- `message` is a stable human-readable summary
+- `data` carries the success payload; errors always return `null`
+
+Error example:
+
+```json
+{
+  "code": 40015,
+  "message": "file is required",
+  "data": null
+}
+```
+
+Routes intentionally outside the JSON success contract:
+
+- `/files` returns HTML
+- `/media/<file_id>` returns file bytes on success and plain text `404` when the entry is unknown
+- `/ui/client-log` returns HTTP `204 No Content`
+
+## Error Codes
+
+Error codes are defined in `modules/error_codes.py` and documented in detail at:
+
+- `docs/error-codes.md`
+- Endpoint-first lookup: `docs/error-codes.md#endpoint-reverse-lookup`
+
+For quick checks, the JSON error envelope remains:
+
+```json
+{
+  "code": 40015,
+  "message": "file is required",
+  "data": null
+}
+```
+
+## Code Quality and Tests
+
+```powershell
+pip install -r quality/requirements-dev.txt
+ruff check .
+pytest
+```
 
 ## Known Behaviors and Limitations
 

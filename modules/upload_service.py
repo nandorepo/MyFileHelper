@@ -1,141 +1,49 @@
 from __future__ import annotations
 
-from datetime import datetime
-from pathlib import Path
 from uuid import uuid4
 
 from flask import send_file
 from werkzeug.utils import secure_filename
 
+from .error_codes import (
+    ROUTE_MEDIA_FILE_NOT_FOUND,
+    UPLOAD_EMPTY_FILE,
+    UPLOAD_FILE_TOO_LARGE,
+    UPLOAD_MERGE_VERIFICATION_FAILED,
+)
+from .message_service import append_message
 from .response_utils import utc_now_iso
 from .state import Message
+from .upload_storage import (
+    choose_chunk_size,
+    create_upload_session,
+    merge_chunks,
+    save_stream_as_chunks,
+    save_stream_to_file,
+    save_upload_chunk,
+)
+
+__all__ = [
+    "choose_chunk_size",
+    "create_upload_session",
+    "save_upload_chunk",
+    "save_stream_to_file",
+    "save_stream_as_chunks",
+    "merge_chunks",
+    "finalize_upload_session",
+    "store_auto_uploaded_file",
+    "store_uploaded_file",
+    "serialize_attachment",
+    "serialize_message",
+    "map_auto_upload_error",
+    "orchestrate_auto_upload",
+    "send_entry",
+]
 
 
-def choose_chunk_size(upload_config, upload_sessions: dict, expected_size: int | None = None) -> int:
-    chunk_size = upload_config.default_chunk_size_bytes
-    if expected_size is not None and expected_size > 0:
-        if expected_size < 100 * 1024 * 1024:
-            chunk_size = 4 * 1024 * 1024
-        elif expected_size > 1024 * 1024 * 1024:
-            chunk_size = 16 * 1024 * 1024
-
-    active_uploads = len(upload_sessions)
-    if active_uploads >= upload_config.high_concurrency_threshold:
-        chunk_size = max(4 * 1024 * 1024, chunk_size // 2)
-
-    mem_cap = max(upload_config.min_chunk_size_bytes, upload_config.mem_budget_per_upload_bytes // 2)
-    chunk_size = min(chunk_size, mem_cap)
-    chunk_size = max(chunk_size, upload_config.min_chunk_size_bytes)
-    chunk_size = min(chunk_size, upload_config.max_chunk_size_bytes)
-    return chunk_size
-
-
-def create_upload_session(upload_config, upload_sessions: dict, *, filename: str, size: int, mime: str, client_msg_id: str) -> dict:
-    upload_id = str(uuid4())
-    upload_sessions[upload_id] = {
-        "filename": filename,
-        "size": size,
-        "mime": mime,
-        "client_msg_id": client_msg_id,
-        "created_at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
-    }
-    (upload_config.chunk_dir / upload_id).mkdir(parents=True, exist_ok=True)
-    return {
-        "upload_id": upload_id,
-        "chunk_size": choose_chunk_size(upload_config, upload_sessions, size),
-        "max_concurrency": upload_config.max_concurrency,
-        "max_file_size_bytes": upload_config.max_file_size_bytes,
-    }
-
-
-def save_upload_chunk(upload_config, upload_sessions: dict, *, upload_id: str, index: int, total_chunks: int, chunk_stream) -> dict:
-    if upload_id not in upload_sessions:
-        raise KeyError("upload session not found")
-    if index < 0 or total_chunks <= 0 or index >= total_chunks:
-        raise IndexError("chunk index out of range")
-
-    chunk_dir = upload_config.chunk_dir / upload_id
-    chunk_dir.mkdir(parents=True, exist_ok=True)
-    chunk_path = chunk_dir / f"chunk_{index:06d}.part"
-
-    with chunk_path.open("wb") as output:
-        chunk_stream.seek(0)
-        while True:
-            data = chunk_stream.read(1024 * 1024)
-            if not data:
-                break
-            output.write(data)
-
-    return {"upload_id": upload_id, "index": index}
-
-
-def save_stream_to_file(stream, destination: Path, upload_config) -> int:
-    total = 0
-    with destination.open("wb") as output:
-        while True:
-            data = stream.read(1024 * 1024)
-            if not data:
-                break
-            total += len(data)
-            if total > upload_config.max_file_size_bytes:
-                raise ValueError("file too large")
-            output.write(data)
-    return total
-
-
-def save_stream_as_chunks(stream, upload_id: str, upload_config, upload_sessions: dict, expected_size: int | None = None) -> tuple[int, int]:
-    chunk_size = choose_chunk_size(upload_config, upload_sessions, expected_size)
-    chunk_dir = upload_config.chunk_dir / upload_id
-    chunk_dir.mkdir(parents=True, exist_ok=True)
-
-    total_bytes = 0
-    total_chunks = 0
-    while True:
-        data = stream.read(chunk_size)
-        if not data:
-            break
-        total_bytes += len(data)
-        if total_bytes > upload_config.max_file_size_bytes:
-            raise ValueError("file too large")
-        chunk_path = chunk_dir / f"chunk_{total_chunks:06d}.part"
-        with chunk_path.open("wb") as output:
-            output.write(data)
-        total_chunks += 1
-
-    return total_chunks, total_bytes
-
-
-def merge_chunks(upload_id: str, total_chunks: int, destination: Path, upload_config) -> int:
-    chunk_dir = upload_config.chunk_dir / upload_id
-    if not chunk_dir.exists():
-        raise FileNotFoundError("chunk directory not found")
-
-    bytes_written = 0
-    tmp_destination = destination.with_suffix(destination.suffix + ".tmp")
-    with tmp_destination.open("wb") as output:
-        for index in range(total_chunks):
-            chunk_path = chunk_dir / f"chunk_{index:06d}.part"
-            if not chunk_path.exists():
-                raise FileNotFoundError(f"missing chunk {index}")
-            with chunk_path.open("rb") as chunk_file:
-                while True:
-                    data = chunk_file.read(1024 * 1024)
-                    if not data:
-                        break
-                    bytes_written += len(data)
-                    if bytes_written > upload_config.max_file_size_bytes:
-                        raise ValueError("file too large")
-                    output.write(data)
-
-    tmp_destination.replace(destination)
-
-    for chunk_path in chunk_dir.glob("chunk_*.part"):
-        chunk_path.unlink(missing_ok=True)
-    chunk_dir.rmdir()
-    return bytes_written
-
-
-def finalize_upload_session(upload_config, upload_sessions: dict, uploaded_files: dict, *, upload_id: str, total_chunks: int) -> dict:
+def finalize_upload_session(
+    upload_config, upload_sessions: dict, uploaded_files: dict, *, upload_id: str, total_chunks: int
+) -> dict:
     session_info = upload_sessions.pop(upload_id)
     safe_name = secure_filename(session_info["filename"]) or f"{upload_id}.bin"
     stored_name = f"{upload_id}_{safe_name}"
@@ -272,10 +180,71 @@ def serialize_message(message: Message) -> dict:
     }
 
 
+def map_auto_upload_error(exc: Exception) -> tuple[str, int, int]:
+    if isinstance(exc, EOFError):
+        return "empty file", 400, UPLOAD_EMPTY_FILE
+    if isinstance(exc, RuntimeError):
+        return "merge verification failed", 500, UPLOAD_MERGE_VERIFICATION_FAILED
+    if isinstance(exc, ValueError):
+        return "file too large", 413, UPLOAD_FILE_TOO_LARGE
+    raise exc
+
+
+def orchestrate_auto_upload(
+    upload_config,
+    state,
+    socketio,
+    *,
+    upload_stream,
+    filename: str,
+    mime: str,
+    client_msg_id: str,
+    chunked: bool,
+    create_message: bool,
+    message_user: str,
+    expected_size: int | None = None,
+) -> tuple[dict | None, tuple[str, int, int] | None]:
+    try:
+        with state.uploads_lock:
+            entry, chunk_size = store_auto_uploaded_file(
+                upload_config,
+                state.upload_sessions,
+                state.uploaded_files,
+                upload_stream=upload_stream,
+                filename=filename,
+                mime=mime,
+                client_msg_id=client_msg_id,
+                chunked=chunked,
+                expected_size=expected_size,
+            )
+    except (EOFError, RuntimeError, ValueError) as exc:
+        return None, map_auto_upload_error(exc)
+
+    if create_message:
+        append_message(
+            state,
+            socketio,
+            user=message_user,
+            text=entry["original_name"],
+            kind="file",
+            attachments=[entry],
+            client_msg_id=client_msg_id or None,
+            broadcast=True,
+        )
+
+    return {
+        "file": serialize_attachment(entry),
+        "upload": {
+            "chunked": chunked,
+            "chunk_size": chunk_size,
+        },
+    }, None
+
+
 def send_entry(entry: dict, upload_config, error_response, *, as_attachment: bool):
     file_path = upload_config.upload_dir / entry["stored_name"]
     if not file_path.exists():
-        return error_response("file not found", 404, 40401)
+        return error_response("file not found", 404, ROUTE_MEDIA_FILE_NOT_FOUND)
 
     return send_file(
         file_path,

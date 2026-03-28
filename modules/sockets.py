@@ -35,7 +35,9 @@ def register_socket_handlers(socketio, state) -> None:
             state.sid_to_terminal_session[request.sid] = terminal_session_id
             state.clients[request.sid] = username
 
-        emit("history", [asdict(m) for m in state.messages])
+        with state.messages_lock:
+            history = [asdict(m) for m in state.messages]
+        emit("history", history)
         emit_clients(state, socketio)
         return {"ok": True}
 
@@ -44,7 +46,8 @@ def register_socket_handlers(socketio, state) -> None:
         text = (data or {}).get("text", "").strip()
         if not text:
             return
-        username = state.clients.get(request.sid, "Anonymous")
+        with state.clients_lock:
+            username = state.clients.get(request.sid, "Anonymous")
         append_message(state, socketio, user=username, text=text, kind="text", broadcast=True)
 
     @socketio.on("disconnect")

@@ -15,7 +15,7 @@ access_control:
   enabled: true
   allowed_networks:
     - 127.0.0.1/32
-    - 192.168.1.0/24
+    - 192.168.2.0/24
 
 logging:
   client_log:
