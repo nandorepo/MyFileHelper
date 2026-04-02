@@ -160,3 +160,8 @@ out/
 # =====================================
 local_settings.py
 config.local.*
+
+# =====================================
+# Internal refactoring notes (not for repo)
+# =====================================
+docs/refactoring-history/

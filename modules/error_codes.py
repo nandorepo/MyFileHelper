@@ -21,8 +21,8 @@ UPLOAD_FILE_REQUIRED = 40015
 UPLOAD_AUTO_CHUNK_DISABLED = 40016
 UPLOAD_EMPTY_FILE = 40017
 UPLOAD_FILE_TOO_LARGE = 41301
+UPLOAD_QUEUE_TIMEOUT = 50301
 UPLOAD_MERGE_VERIFICATION_FAILED = 50001
-
 # Core route/media error codes
 ROUTE_ACCESS_FORBIDDEN = 40301
 ROUTE_MEDIA_FILE_NOT_FOUND = 40401
@@ -95,6 +95,12 @@ ERROR_CODE_CATALOG = {
         "scope": "upload",
         "description": "Chunk merge verification failed after writing the upload.",
     },
+    UPLOAD_QUEUE_TIMEOUT: {
+        "name": "UPLOAD_QUEUE_TIMEOUT",
+        "http_status": 503,
+        "scope": "upload",
+        "description": "Upload could not start within the configured queue timeout.",
+    },
     ROUTE_ACCESS_FORBIDDEN: {
         "name": "ROUTE_ACCESS_FORBIDDEN",
         "http_status": 403,
@@ -121,6 +127,7 @@ __all__ = [
     "UPLOAD_AUTO_CHUNK_DISABLED",
     "UPLOAD_EMPTY_FILE",
     "UPLOAD_FILE_TOO_LARGE",
+    "UPLOAD_QUEUE_TIMEOUT",
     "UPLOAD_MERGE_VERIFICATION_FAILED",
     "ROUTE_ACCESS_FORBIDDEN",
     "ROUTE_MEDIA_FILE_NOT_FOUND",

@@ -25,6 +25,9 @@ class UploadConfig:
     auto_chunk_default_enabled: bool
     high_concurrency_threshold: int
     mem_budget_per_upload_mb: int
+    upload_queue_enabled: bool
+    max_active_uploads: int
+    upload_queue_timeout_seconds: int
 
     @property
     def max_file_size_bytes(self) -> int:
@@ -55,6 +58,14 @@ class ClientLogConfig:
 
 
 @dataclass
+class DownloadConfig:
+    """下载配置"""
+    max_concurrent_downloads: int
+    download_timeout_seconds: int
+    enable_queue: bool
+
+
+@dataclass
 class ServerConfig:
     pagination_default_limit: int
     pagination_hard_cap: int
@@ -66,6 +77,7 @@ class ServerConfig:
     autoindex_enabled: bool
     access_control_enabled: bool
     allowed_networks: list[str]
+    download_config: DownloadConfig = None
 
 
 def _load_yaml(path: Path) -> dict:
@@ -108,6 +120,9 @@ def load_upload_config() -> UploadConfig:
         auto_chunk_default_enabled=False,
         high_concurrency_threshold=20,
         mem_budget_per_upload_mb=32,
+        upload_queue_enabled=False,
+        max_active_uploads=3,
+        upload_queue_timeout_seconds=300,
     )
     data = _load_yaml(UPLOAD_CONFIG_PATH)
 
@@ -115,6 +130,7 @@ def load_upload_config() -> UploadConfig:
     limits = data.get("limits", {}) or {}
     chunking = data.get("chunking", {}) or {}
     auto_chunk = data.get("autoChunk", {}) or {}
+    upload_throttle = data.get("uploadThrottle", {}) or {}
 
     upload_dir = str(storage.get("uploadDir", str(defaults.upload_dir))).strip()
     chunk_dir = str(storage.get("tempDir", str(defaults.chunk_dir))).strip()
@@ -132,7 +148,15 @@ def load_upload_config() -> UploadConfig:
         high_concurrency_threshold=int(
             auto_chunk.get("highConcurrencyThreshold", defaults.high_concurrency_threshold)
         ),
-        mem_budget_per_upload_mb=int(auto_chunk.get("memBudgetPerUploadMB", defaults.mem_budget_per_upload_mb)),
+        mem_budget_per_upload_mb=int(
+            auto_chunk.get("memBudgetPerUploadMB", defaults.mem_budget_per_upload_mb)
+        ),
+        upload_queue_enabled=_as_bool(upload_throttle.get("enabled"), defaults.upload_queue_enabled),
+        max_active_uploads=max(1, int(upload_throttle.get("maxActiveUploads", defaults.max_active_uploads))),
+        upload_queue_timeout_seconds=max(
+            1,
+            int(upload_throttle.get("queueTimeoutSeconds", defaults.upload_queue_timeout_seconds)),
+        ),
     )
 
 
@@ -152,6 +176,11 @@ def load_server_config() -> ServerConfig:
         autoindex_enabled=False,
         access_control_enabled=False,
         allowed_networks=[],
+        download_config=DownloadConfig(
+            max_concurrent_downloads=5,
+            download_timeout_seconds=300,
+            enable_queue=True,
+        ),
     )
     data = _load_yaml(SERVER_CONFIG_PATH)
 
@@ -166,6 +195,13 @@ def load_server_config() -> ServerConfig:
 
     autoindex_conf = data.get("autoindex", {}) or {}
     access_control = data.get("access_control", {}) or {}
+    download_conf = data.get("download", {}) or {}
+
+    download_config = DownloadConfig(
+        max_concurrent_downloads=int(download_conf.get("max_concurrent_downloads", defaults.download_config.max_concurrent_downloads)),
+        download_timeout_seconds=int(download_conf.get("timeout_seconds", defaults.download_config.download_timeout_seconds)),
+        enable_queue=_as_bool(download_conf.get("enable_queue"), defaults.download_config.enable_queue),
+    )
 
     return ServerConfig(
         pagination_default_limit=int(pagination.get("default_limit", defaults.pagination_default_limit)),
@@ -187,4 +223,5 @@ def load_server_config() -> ServerConfig:
         autoindex_enabled=_as_bool(autoindex_conf.get("enabled"), defaults.autoindex_enabled),
         access_control_enabled=_as_bool(access_control.get("enabled"), defaults.access_control_enabled),
         allowed_networks=list(access_control.get("allowed_networks", defaults.allowed_networks) or []),
+        download_config=download_config,
     )

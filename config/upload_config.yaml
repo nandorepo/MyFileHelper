@@ -16,3 +16,8 @@ autoChunk:
   defaultEnabled: false
   highConcurrencyThreshold: 20
   memBudgetPerUploadMB: 32
+
+uploadThrottle:
+  enabled: true
+  maxActiveUploads: 3
+  queueTimeoutSeconds: 300

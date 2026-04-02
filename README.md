@@ -7,8 +7,8 @@ A LAN messaging and file-sharing tool built with Flask + Flask-SocketIO (data is
 ## Features
 
 - Real-time message sync (Socket.IO)
-- File upload and download
-- Drag-and-drop browser upload (automatic chunking for large files)
+- File upload and download with drag-and-drop support
+- Server-side automatic chunking for large uploads
 
 ## Requirements
 
@@ -41,6 +41,12 @@ Default bind: `0.0.0.0:80`
 
 - `config/upload_config.yaml`: upload directories, size limits, chunking and auto-chunk settings
 - `config/server_config.yaml`: pagination, Socket.IO, logging, and access-control settings
+
+## Files Index Entry (`/files`)
+
+- Visit `http://<host>/files` to browse uploaded files (requires `autoindex.enabled` in `config/server_config.yaml`).
+- File links use URL aliases (`/media/1`, `/media/2`, ...) and can be used for preview or download.
+- For `wget` downloads, append `?download=1`, for example: `/media/1?download=1`.
 
 ## Error Codes
 

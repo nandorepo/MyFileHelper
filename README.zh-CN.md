@@ -7,8 +7,8 @@
 ## 功能
 
 - 实时消息同步（Socket.IO）
-- 文件上传与下载
-- 浏览器拖拽上传（大文件自动分片）
+- 文件上传与下载，支持拖放上传
+- 上传大文件时，服务端自动分片
 
 ## 环境要求
 
@@ -41,6 +41,12 @@ python app.py
 
 - `config/upload_config.yaml`：上传目录、大小限制、分片与自动分片设置
 - `config/server_config.yaml`：分页、Socket.IO、日志与访问控制设置
+
+## 文件列表入口（`/files`）
+
+- 访问 `http://<host>/files` 可浏览已上传文件（需在 `config/server_config.yaml` 中启用 `autoindex.enabled`）。
+- 文件链接使用 URL alias：`/media/1`、`/media/2` ...，可用于预览或下载。
+- wget 下载建议追加 `?download=1`，例如：`/media/1?download=1`。
 
 ## 错误码
 

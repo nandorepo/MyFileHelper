@@ -22,3 +22,9 @@ logging:
     path: logs/client.log
     max_bytes: 10485760
     backup_count: 5
+
+# 下载队列配置
+download:
+  enable_queue: true                    # 是否启用下载队列
+  max_concurrent_downloads: 5           # 最多同时进行的下载数
+  timeout_seconds: 300                  # 单个下载超时时间（秒）

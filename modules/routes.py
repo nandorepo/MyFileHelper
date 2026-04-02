@@ -7,6 +7,8 @@ import logging
 from flask import render_template, request, session
 
 from .error_codes import ROUTE_ACCESS_FORBIDDEN
+
+logger = logging.getLogger(__name__)
 from .log_routes import register_log_routes
 from .message_routes import register_message_routes
 from .upload_routes import register_upload_routes
@@ -139,11 +141,56 @@ def _register_page_routes(app, upload_config, server_config, state) -> None:
 
     @app.get("/media/<file_id>")
     def media(file_id: str):
+        """
+        下载文件 - 带队列管理
+        查询参数：
+            - download=1: 以附件方式下载
+            - queue=0: 跳过队列（仅用于内联预览）
+        """
         entry = _resolve_media_entry_by_ref(state, file_id)
         if not entry:
             return "Not Found", 404
+        
+        # 获取查询参数
         as_attachment = request.args.get("download") == "1"
-        return send_entry(entry, upload_config, error_response, as_attachment=as_attachment)
+        use_queue = request.args.get("queue") != "0"  # 默认使用队列
+        
+        # 如果是下载请求且启用队列，则使用队列
+        if as_attachment and use_queue and server_config.download_config.enable_queue:
+            download_manager = state.get_download_manager()
+            
+            # 提交下载任务
+            task = download_manager.submit_download(file_id)
+            
+            # 等待获得下载槽位
+            timeout = server_config.download_config.download_timeout_seconds
+            ready = download_manager.wait_for_slot(task, timeout=timeout)
+            
+            if not ready:
+                logger.warning("Download timeout for file_id=%s", file_id)
+                return error_response(
+                    "download queue timeout",
+                    503,
+                    code=5001
+                )
+            
+            try:
+                # 执行下载
+                response = send_entry(entry, upload_config, error_response, as_attachment=as_attachment)
+                
+                # 标记下载完成
+                download_manager.mark_download_completed(task)
+                
+                return response
+                
+            except Exception as e:
+                # 标记下载失败
+                download_manager.mark_download_failed(task, str(e))
+                logger.error("Download error for file_id=%s: %s", file_id, e)
+                raise
+        else:
+            # 不使用队列（内联预览或禁用队列）
+            return send_entry(entry, upload_config, error_response, as_attachment=as_attachment)
 
     @app.get("/files")
     def files_index():
@@ -155,7 +202,7 @@ def _register_page_routes(app, upload_config, server_config, state) -> None:
         items.sort(key=lambda x: (x.get("uploaded_at", ""), x.get("file_id", "")))
 
         return _build_files_index_html(items)
-
+    
 
 def register_routes(app, socketio, upload_config, server_config, state, client_log_config) -> None:
     _register_request_hooks(app, server_config)

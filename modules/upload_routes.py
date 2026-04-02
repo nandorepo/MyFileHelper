@@ -5,6 +5,7 @@ from flask import request
 from .error_codes import (
     UPLOAD_AUTO_CHUNK_DISABLED,
     UPLOAD_FILE_REQUIRED,
+    UPLOAD_QUEUE_TIMEOUT,
 )
 from .message_service import default_username
 from .response_utils import error_response, normalize_bool, ok_response
@@ -58,21 +59,35 @@ def register_upload_routes(app, socketio, upload_config, state) -> None:
         if error:
             return error
 
+        slot = None
+        queue_enabled = getattr(upload_config, "upload_queue_enabled", False)
+        if queue_enabled:
+            upload_manager = state.get_upload_manager(upload_config)
+            timeout = getattr(upload_config, "upload_queue_timeout_seconds", 300)
+            slot = upload_manager.acquire_slot(timeout)
+            if slot is None:
+                return error_response("upload queue timeout", 503, UPLOAD_QUEUE_TIMEOUT)
+
         chunked = flags["chunked"]
         create_message = flags["create_message"]
-        result, service_error = orchestrate_auto_upload(
-            upload_config,
-            state,
-            socketio,
-            upload_stream=upload_file.stream,
-            filename=upload_file.filename or "",
-            mime=payload["mime"],
-            client_msg_id=payload["client_msg_id"],
-            chunked=chunked,
-            create_message=create_message,
-            message_user=default_username(state),
-            expected_size=payload["expected_size"],
-        )
+        try:
+            result, service_error = orchestrate_auto_upload(
+                upload_config,
+                state,
+                socketio,
+                upload_stream=upload_file.stream,
+                filename=upload_file.filename or "",
+                mime=payload["mime"],
+                client_msg_id=payload["client_msg_id"],
+                chunked=chunked,
+                create_message=create_message,
+                message_user=default_username(state),
+                expected_size=payload["expected_size"],
+            )
+        finally:
+            if slot is not None:
+                upload_manager.release_slot(slot)
+
         if service_error:
             message, status, code = service_error
             return error_response(message, status, code)

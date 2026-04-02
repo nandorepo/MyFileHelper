@@ -1,6 +1,7 @@
 ﻿from __future__ import annotations
 
 import atexit
+import logging
 
 from flask import Flask
 from flask_socketio import SocketIO
@@ -10,6 +11,8 @@ from modules.config import load_server_config, load_upload_config
 from modules.routes import register_routes
 from modules.sockets import register_socket_handlers
 from modules.state import AppState
+
+logger = logging.getLogger(__name__)
 
 
 def create_socketio_app(
@@ -23,6 +26,16 @@ def create_socketio_app(
     upload_config = load_upload_config()
     server_config = load_server_config()
     state = AppState()
+
+    # 初始化下载队列管理器（使用配置中的max_concurrent_downloads）
+    download_manager = state.get_download_manager()
+    # 更新为配置值
+    download_manager.max_concurrent = server_config.download_config.max_concurrent_downloads
+    logger.info(
+        "Download manager initialized (max_concurrent=%d, enable_queue=%s)",
+        server_config.download_config.max_concurrent_downloads,
+        server_config.download_config.enable_queue
+    )
 
     socketio = SocketIO(
         app,
@@ -38,6 +51,8 @@ def create_socketio_app(
         clean_upload_dirs(upload_config)
     if register_exit_cleanup:
         atexit.register(clean_upload_dirs, upload_config)
+        # 新增：关闭下载管理器
+        atexit.register(download_manager.shutdown)
 
     register_routes(
         app,
@@ -54,6 +69,7 @@ def create_socketio_app(
         "server_config": server_config,
         "state": state,
         "socketio": socketio,
+        "download_manager": download_manager,
     }
     return app, socketio
 
